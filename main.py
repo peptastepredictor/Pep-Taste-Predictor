@@ -26,6 +26,8 @@
 #  13. CSS heading colour uses Streamlit variable (dark-mode safe)
 #  14. PDF figures list cleared on mode switch
 #  15. ProteinAnalysis reused across feature functions (no double call)
+#  16. ALL_DIPEPTIDES pre-enumerated → fixes sklearn feature-name
+#      mismatch ValueError on single-sequence prediction
 # ==========================================================
 
 
@@ -85,6 +87,12 @@ st.set_page_config(
 DATASET_PATH = "AIML (4).xlsx"
 AA = "ACDEFGHIKLMNPQRSTVWY"
 
+# Pre-enumerate every possible dipeptide (20×20 = 400).
+# FIX: using a fixed list guarantees model_features() always returns
+# identical columns whether called on training data or a single prediction,
+# preventing the sklearn "feature names mismatch" ValueError.
+ALL_DIPEPTIDES = [a1 + a2 for a1 in AA for a2 in AA]
+
 
 # ==========================================================
 # SECTION 3 — FRONTEND STYLING
@@ -107,7 +115,6 @@ st.markdown(
     color: white;
     margin-bottom: 30px;
 }
-/* FIX: removed hardcoded h1/h2/h3 colour that broke dark mode */
 .metric {
     font-size: 20px;
     font-weight: 600;
@@ -129,7 +136,6 @@ st.markdown(
 # SECTION 4 — SIDEBAR
 # ==========================================================
 
-# FIX: guard logo so missing file doesn't crash the app
 if os.path.exists("logo.png"):
     st.sidebar.image("logo.png", width=120)
 
@@ -178,7 +184,6 @@ def model_features(seq):
     """
     Convert peptide sequence into ML feature vector.
     Includes AA composition, dipeptide composition, and group features.
-    FIX: ProteinAnalysis created once and reused.
     """
     ana = ProteinAnalysis(seq)
 
@@ -196,11 +201,13 @@ def model_features(seq):
     for aa in AA:
         features[f"AA_{aa}"] = seq.count(aa) / len(seq)
 
-    # Dipeptide composition (FIX: richer features for better accuracy)
+    # Dipeptide composition — iterate over ALL 400 possible dipeptides so
+    # every feature vector has identical columns regardless of sequence.
+    # FIX: was looping over seq[i:i+2] which only added dipeptides actually
+    # present, causing a column-count mismatch at prediction time (ValueError).
     denom = max(len(seq) - 1, 1)
-    for i in range(len(seq) - 1):
-        dp = seq[i : i + 2]
-        features[f"DPC_{dp}"] = features.get(f"DPC_{dp}", 0) + 1 / denom
+    for dp in ALL_DIPEPTIDES:
+        features[f"DPC_{dp}"] = seq.count(dp) / denom
 
     # Amino acid group composition
     L = len(seq)
@@ -223,24 +230,21 @@ def build_feature_table(seqs):
 
 
 def physicochemical_features(seq):
-    """
-    Compute physicochemical properties.
-    FIX: reuses ProteinAnalysis object (no duplicate computation).
-    """
+    """Compute physicochemical properties."""
     ana = ProteinAnalysis(seq)
     h, t, s = ana.secondary_structure_fraction()
 
     return {
-        "Length":                  len(seq),
-        "Molecular weight (Da)":   round(ana.molecular_weight(), 2),
-        "Isoelectric point":       round(ana.isoelectric_point(), 2),
-        "Net charge (pH 7)":       round(ana.charge_at_pH(7.0), 2),
-        "Aromaticity":             round(ana.aromaticity(), 3),
-        "GRAVY":                   round(ana.gravy(), 3),
-        "Instability index":       round(ana.instability_index(), 2),
-        "Helix fraction":          round(h, 3),
-        "Turn fraction":           round(t, 3),
-        "Sheet fraction":          round(s, 3),
+        "Length":                len(seq),
+        "Molecular weight (Da)": round(ana.molecular_weight(), 2),
+        "Isoelectric point":     round(ana.isoelectric_point(), 2),
+        "Net charge (pH 7)":     round(ana.charge_at_pH(7.0), 2),
+        "Aromaticity":           round(ana.aromaticity(), 3),
+        "GRAVY":                 round(ana.gravy(), 3),
+        "Instability index":     round(ana.instability_index(), 2),
+        "Helix fraction":        round(h, 3),
+        "Turn fraction":         round(t, 3),
+        "Sheet fraction":        round(s, 3),
     }
 
 
@@ -248,7 +252,6 @@ def composition_features(seq):
     """Amino acid group composition percentages."""
     c = Counter(seq)
     L = len(seq)
-
     return {
         "Hydrophobic (%)": round(100 * sum(c[a] for a in "AILMFWV") / L, 1),
         "Polar (%)":       round(100 * sum(c[a] for a in "STNQ") / L, 1),
@@ -259,9 +262,8 @@ def composition_features(seq):
 
 def simplify_taste(taste_series):
     """
-    FIX: Merge rare taste classes (< 5 samples) into their dominant
-    base taste. Reduces 24 noisy classes → 13 learnable classes and
-    improves accuracy from 56% → 68%.
+    Merge rare taste classes (< 5 samples) into their dominant base taste.
+    Reduces 24 noisy classes → 13 learnable classes.
     """
     counts = taste_series.value_counts()
     rare = set(counts[counts < 5].index)
@@ -282,7 +284,7 @@ def simplify_taste(taste_series):
 # ==========================================================
 
 def build_peptide_pdb(seq):
-    """Generate peptide PDB using PeptideBuilder. FIX: file handle closed."""
+    """Generate peptide PDB using PeptideBuilder."""
     structure = PeptideBuilder.initialize_res(seq[0])
     for aa in seq[1:]:
         PeptideBuilder.add_residue(structure, Geometry.geometry(aa))
@@ -291,7 +293,6 @@ def build_peptide_pdb(seq):
     io.set_structure(structure)
     io.save("predicted_peptide.pdb")
 
-    # FIX: use with-open so file handle is always closed
     with open("predicted_peptide.pdb") as f:
         return f.read()
 
@@ -306,21 +307,15 @@ def show_structure(pdb_text):
 
 
 def _write_temp_pdb(pdb_text):
-    """
-    FIX: Write PDB to a named temp file instead of a fixed path.
-    Prevents session collisions in multi-user deployments.
-    Returns the temp file path (caller must delete when done).
-    """
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".pdb", delete=False
-    )
+    """Write PDB to a named temp file. Caller must delete when done."""
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".pdb", delete=False)
     tmp.write(pdb_text)
     tmp.close()
     return tmp.name
 
 
 def ramachandran(pdb_text):
-    """Calculate phi-psi angles. FIX: uses temp file, handle closed."""
+    """Calculate phi-psi angles."""
     tmp_path = _write_temp_pdb(pdb_text)
     try:
         structure = PDBParser(QUIET=True).get_structure("x", tmp_path)[0]
@@ -335,10 +330,7 @@ def ramachandran(pdb_text):
 
 
 def ca_distance_map(pdb_text):
-    """
-    C-alpha distance matrix.
-    FIX: vectorised numpy (no O(n²) Python loop), temp file, handle closed.
-    """
+    """C-alpha distance matrix — vectorised."""
     tmp_path = _write_temp_pdb(pdb_text)
     try:
         structure = PDBParser(QUIET=True).get_structure("x", tmp_path)
@@ -357,7 +349,7 @@ def ca_distance_map(pdb_text):
 
 
 def ca_rmsd(pdb_text):
-    """RMSD relative to first residue. FIX: temp file, handle closed."""
+    """RMSD relative to first residue."""
     tmp_path = _write_temp_pdb(pdb_text)
     try:
         structure = PDBParser(QUIET=True).get_structure("x", tmp_path)
@@ -376,16 +368,12 @@ def ca_rmsd(pdb_text):
 
 # ==========================================================
 # SECTION 8 — STRUCTURAL ANALYSIS HELPER
-# FIX: extracted duplicate Ramachandran + distance map code
-#      (was copy-pasted in sections 13 and 15)
+# Extracted from duplicate blocks in sections 14 and 16
 # ==========================================================
 
 def render_structural_analysis(pdb_text, prefix=""):
-    """
-    Render Ramachandran plot and Cα distance map for any PDB text.
-    prefix is used to give unique filenames per mode.
-    """
-    # --- Ramachandran ---
+    """Render Ramachandran plot and Cα distance map for any PDB text."""
+
     st.markdown("### 📐 Ramachandran Plot")
     phi_psi = ramachandran(pdb_text)
     if phi_psi:
@@ -395,21 +383,18 @@ def render_structural_analysis(pdb_text, prefix=""):
         ax.set_xlabel("Phi (°)")
         ax.set_ylabel("Psi (°)")
         ax.set_title("Ramachandran Plot")
-        fname = f"{prefix}ramachandran.png"
-        save_fig(fig_rama, fname)
+        save_fig(fig_rama, f"{prefix}ramachandran.png")
         st.pyplot(fig_rama)
         plt.close(fig_rama)
     else:
         st.info("No phi/psi angles found — peptide may be too short.")
 
-    # --- Cα distance map ---
     st.markdown("### 🗺️ Cα Distance Map")
     dist_map = ca_distance_map(pdb_text)
     fig_dist, ax = plt.subplots(figsize=(5, 5))
     sns.heatmap(dist_map, cmap="viridis", ax=ax)
     ax.set_title("Cα Distance Heatmap")
-    fname = f"{prefix}ca_distance_map.png"
-    save_fig(fig_dist, fname)
+    save_fig(fig_dist, f"{prefix}ca_distance_map.png")
     st.pyplot(fig_dist)
     plt.close(fig_dist)
 
@@ -420,17 +405,8 @@ def render_structural_analysis(pdb_text, prefix=""):
 
 @st.cache_data
 def train_models():
-    """
-    Train ExtraTrees models for taste, solubility, and docking.
+    """Train ExtraTrees models for taste, solubility, and docking."""
 
-    Fixes vs original:
-    • Label noise cleaned (Fix 1)
-    • Rare taste classes merged (Fix 2)
-    • ExtraTrees + class_weight="balanced" (Fix 3)
-    • Single index split reused across all targets (Fix 4)
-    • Returns test split so Section 16 uses correct holdout data (Fix 5)
-    """
-    # FIX: graceful error if dataset is missing
     if not os.path.exists(DATASET_PATH):
         st.error(f"Dataset not found: {DATASET_PATH}")
         st.stop()
@@ -446,10 +422,10 @@ def train_models():
         & df["docking score (kcal/mol)"].notna()
     ].reset_index(drop=True)
 
-    # FIX 1 — clean solubility label noise
+    # Fix 1 — clean solubility label noise
     df["solubility"] = df["solubility"].str.strip().str.rstrip(".")
 
-    # FIX 2 — merge rare taste classes
+    # Fix 2 — merge rare taste classes
     df["taste"] = simplify_taste(df["taste"])
 
     X = build_feature_table(df["peptide"])
@@ -461,7 +437,7 @@ def train_models():
     y_sol   = le_sol.fit_transform(df["solubility"])
     y_dock  = df["docking score (kcal/mol)"].values
 
-    # FIX 4 — single index split reused across all three targets
+    # Fix 4 — single index split reused across all three targets
     idx = np.arange(len(X))
     tr_idx, te_idx = train_test_split(
         idx, test_size=0.2, random_state=42, stratify=y_taste
@@ -472,7 +448,7 @@ def train_models():
     ys_tr, ys_te = y_sol[tr_idx],   y_sol[te_idx]
     yd_tr, yd_te = y_dock[tr_idx],  y_dock[te_idx]
 
-    # FIX 3 — ExtraTrees with balanced class weights
+    # Fix 3 — ExtraTrees with balanced class weights
     taste_model = ExtraTreesClassifier(
         n_estimators=500, class_weight="balanced", random_state=42
     )
@@ -494,7 +470,7 @@ def train_models():
         "Docking R²":          r2_score(yd_te, dock_model.predict(Xte)),
     }
 
-    # FIX 5 — return test split for unbiased confusion matrix
+    # Fix 5 — return test split for unbiased confusion matrix in analytics
     return (
         df, X, Xte, yt_te, ys_te, yd_te,
         taste_model, sol_model, dock_model,
@@ -522,17 +498,14 @@ def generate_pdf(metrics, prediction, image_paths):
     file_name = "PepTastePredictor_Full_Report.pdf"
     styles = getSampleStyleSheet()
     doc = SimpleDocTemplate(file_name, pagesize=A4)
-
     story = []
 
     story.append(Paragraph("<b>PepTastePredictor</b>", styles["Title"]))
     story.append(Spacer(1, 12))
-    story.append(
-        Paragraph(
-            "AI-driven peptide taste, solubility, docking, and structural analysis platform.",
-            styles["Normal"],
-        )
-    )
+    story.append(Paragraph(
+        "AI-driven peptide taste, solubility, docking, and structural analysis platform.",
+        styles["Normal"],
+    ))
     story.append(Spacer(1, 12))
 
     story.append(Paragraph("<b>Model Performance</b>", styles["Heading2"]))
@@ -561,8 +534,7 @@ def generate_pdf(metrics, prediction, image_paths):
 # SECTION 12 — HERO HEADER
 # ==========================================================
 
-st.markdown(
-    """
+st.markdown("""
 <div class="hero">
 <h1>🧬 PepTastePredictor</h1>
 <p>
@@ -570,9 +542,7 @@ An integrated machine learning and structural bioinformatics platform
 for peptide taste, solubility, docking, and structural analysis.
 </p>
 </div>
-""",
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
 
 
 # ==========================================================
@@ -591,7 +561,7 @@ mode = st.radio(
     horizontal=True,
 )
 
-# FIX: clear PDF figure list when mode changes to avoid stale paths
+# Clear PDF figure list and analytics when mode changes
 if "current_mode" not in st.session_state or st.session_state.current_mode != mode:
     st.session_state.pdf_figures = []
     st.session_state.show_analytics = False
@@ -621,22 +591,19 @@ if mode == "Single Peptide Prediction":
         else:
             Xp = pd.DataFrame([model_features(seq)])
 
-            # --- ML predictions ---
             taste = le_taste.inverse_transform(taste_model.predict(Xp))[0]
             sol   = le_sol.inverse_transform(sol_model.predict(Xp))[0]
             dock  = dock_model.predict(Xp)[0]
 
             st.session_state.last_prediction = {
-                "Sequence":                seq,
-                "Predicted taste":         taste,
-                "Predicted solubility":    sol,
+                "Sequence":                 seq,
+                "Predicted taste":          taste,
+                "Predicted solubility":     sol,
                 "Docking score (kcal/mol)": round(dock, 3),
             }
             st.session_state.show_analytics = True
 
-            # --- Summary card ---
-            st.markdown(
-                f"""
+            st.markdown(f"""
             <div class="card">
                 <div class="metric">Taste</div>
                 <p>{taste}</p>
@@ -645,25 +612,17 @@ if mode == "Single Peptide Prediction":
                 <div class="metric">Docking Score</div>
                 <p>{dock:.3f} kcal/mol</p>
             </div>
-            """,
-                unsafe_allow_html=True,
-            )
+            """, unsafe_allow_html=True)
 
-            # --- Physicochemical properties ---
             st.markdown("### 📌 Physicochemical Properties")
-            props = physicochemical_features(seq)
-            for k, v in props.items():
+            for k, v in physicochemical_features(seq).items():
                 st.write(f"**{k}**: {v}")
 
-            # --- Composition analysis ---
             st.markdown("### 🧪 Amino Acid Composition")
-            comp = composition_features(seq)
-            for k, v in comp.items():
+            for k, v in composition_features(seq).items():
                 st.write(f"**{k}**: {v}")
 
-            # --- 3D structure ---
             st.markdown("## 🧬 Predicted 3D Peptide Structure")
-
             pdb_text = build_peptide_pdb(seq)
             st.session_state.pdb_text = pdb_text
 
@@ -678,18 +637,15 @@ if mode == "Single Peptide Prediction":
                 height=520,
             )
 
-            # --- RMSD ---
             rmsd_val = ca_rmsd(pdb_text)
             if rmsd_val is not None:
                 st.success(f"Cα RMSD: {rmsd_val:.3f} Å")
 
-            # --- Ramachandran + distance map (FIX: shared helper) ---
             render_structural_analysis(pdb_text, prefix="single_")
 
 
 # ==========================================================
 # SECTION 15 — BATCH PEPTIDE PREDICTION MODE
-# FIX: elif (was if — all branches evaluated every rerender)
 # ==========================================================
 
 elif mode == "Batch Peptide Prediction":
@@ -734,7 +690,6 @@ elif mode == "Batch Peptide Prediction":
 
 # ==========================================================
 # SECTION 16 — PDB UPLOAD & STRUCTURAL ANALYSIS MODE
-# FIX: elif (was if)
 # ==========================================================
 
 elif mode == "PDB Upload & Structural Analysis":
@@ -748,25 +703,21 @@ elif mode == "PDB Upload & Structural Analysis":
         st.session_state.pdb_text = pdb_text
         st.session_state.show_analytics = True
 
-        # --- 3D viewer ---
         st.markdown("### 🧬 3D Structure Viewer")
         st.components.v1.html(
             show_structure(pdb_text)._make_html(),
             height=520,
         )
 
-        # --- RMSD ---
         rmsd_val = ca_rmsd(pdb_text)
         if rmsd_val is not None:
             st.success(f"Cα RMSD: {rmsd_val:.3f} Å")
 
-        # --- Ramachandran + distance map (FIX: shared helper) ---
         render_structural_analysis(pdb_text, prefix="pdb_")
 
 
 # ==========================================================
 # SECTION 17 — MODEL & DATASET ANALYTICS
-# FIX: confusion matrices now use held-out test set (not X_all)
 # ==========================================================
 
 if st.session_state.show_analytics:
@@ -775,17 +726,13 @@ if st.session_state.show_analytics:
 
     with st.expander("📊 Model Performance & Dataset Analytics", expanded=False):
 
-        # --- Performance metrics ---
         st.markdown("### 📈 Model Performance Metrics")
         for k, v in metrics.items():
             st.write(f"**{k}**: {round(v, 4)}")
 
-        # --- PCA ---
         st.markdown("### 🔹 PCA: Overall Feature Space")
-
         pca_all = PCA(n_components=2)
         coords_all = pca_all.fit_transform(X_all)
-
         fig, ax = plt.subplots()
         ax.scatter(coords_all[:, 0], coords_all[:, 1], alpha=0.6)
         ax.set_xlabel("PC1")
@@ -795,20 +742,13 @@ if st.session_state.show_analytics:
         st.pyplot(fig)
         plt.close(fig)
 
-        # FIX 5 — confusion matrix on test set only
-        # --- Confusion matrix — taste ---
         st.markdown("### 🔹 Confusion Matrix — Taste (test set)")
-
         cm_taste = confusion_matrix(yt_test, taste_model.predict(X_test))
         fig, ax = plt.subplots(figsize=(8, 6))
         sns.heatmap(
-            cm_taste,
-            annot=True,
-            fmt="d",
-            cmap="Blues",
+            cm_taste, annot=True, fmt="d", cmap="Blues",
             xticklabels=le_taste.classes_,
-            yticklabels=le_taste.classes_,
-            ax=ax,
+            yticklabels=le_taste.classes_, ax=ax,
         )
         ax.set_title("Taste Confusion Matrix (held-out test set)")
         plt.xticks(rotation=45, ha="right")
@@ -817,39 +757,28 @@ if st.session_state.show_analytics:
         st.pyplot(fig)
         plt.close(fig)
 
-        # --- Confusion matrix — solubility ---
         st.markdown("### 🔹 Confusion Matrix — Solubility (test set)")
-
         cm_sol = confusion_matrix(ys_test, sol_model.predict(X_test))
         fig, ax = plt.subplots()
         sns.heatmap(
-            cm_sol,
-            annot=True,
-            fmt="d",
-            cmap="Greens",
+            cm_sol, annot=True, fmt="d", cmap="Greens",
             xticklabels=le_sol.classes_,
-            yticklabels=le_sol.classes_,
-            ax=ax,
+            yticklabels=le_sol.classes_, ax=ax,
         )
         ax.set_title("Solubility Confusion Matrix (held-out test set)")
         save_fig(fig, "confusion_solubility.png")
         st.pyplot(fig)
         plt.close(fig)
 
-        # --- Feature importance ---
         st.markdown("### 🔹 Feature Importance — Taste Model")
-
         imp_df = (
-            pd.DataFrame(
-                {
-                    "Feature":    X_all.columns,
-                    "Importance": taste_model.feature_importances_,
-                }
-            )
+            pd.DataFrame({
+                "Feature":    X_all.columns,
+                "Importance": taste_model.feature_importances_,
+            })
             .sort_values("Importance", ascending=False)
             .head(20)
         )
-
         fig, ax = plt.subplots(figsize=(6, 6))
         sns.barplot(data=imp_df, x="Importance", y="Feature", ax=ax)
         ax.set_title("Top 20 Important Features (Taste)")
@@ -857,9 +786,7 @@ if st.session_state.show_analytics:
         st.pyplot(fig)
         plt.close(fig)
 
-        # --- Docking scatter ---
         st.markdown("### 🔹 Docking Score: True vs Predicted (test set)")
-
         pred_dock_test = dock_model.predict(X_test)
         fig, ax = plt.subplots()
         ax.scatter(yd_test, pred_dock_test, alpha=0.6)
@@ -903,13 +830,10 @@ if st.session_state.show_analytics and len(st.session_state.pdf_figures) > 0:
 # SECTION 19 — FOOTER
 # ==========================================================
 
-st.markdown(
-    """
+st.markdown("""
 <div class="footer">
 © 2025 <b>PepTastePredictor</b><br>
 An AI + Structural Bioinformatics platform for peptide analysis<br>
 For academic, educational, and research use
 </div>
-""",
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
