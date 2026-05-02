@@ -1,7 +1,7 @@
 # ==========================================================
 # PepTastePredictor — app.py
 # A complete end-to-end peptide analysis platform
-# Dark-mode compatible version (FIXED)
+# Light + Dark Mode Compatible Version
 # ==========================================================
 
 # ==========================================================
@@ -71,7 +71,7 @@ KD_SCALE = {
 
 
 # ==========================================================
-# SECTION 3 - FRONTEND STYLING (Dark Mode Fix)
+# SECTION 3 - FRONTEND STYLING (Light + Dark Mode)
 # ==========================================================
 
 st.markdown(
@@ -79,154 +79,203 @@ st.markdown(
 <style>
 
 /* ══════════════════════════════════════════════════════════
-   NUCLEAR DARK-MODE TEXT FIX
-   Force all Streamlit text elements to be fully visible
-   in both light and dark themes by targeting every
-   internal Streamlit CSS class that controls text color.
-   We use #f0f2ff (near-white with a cool tint) so text
-   looks polished on dark backgrounds and still readable
-   on the hero / card components which have their own bg.
+   CSS CUSTOM PROPERTIES — adapts to light and dark themes
+   automatically using prefers-color-scheme + Streamlit's
+   own theme body class.
 ══════════════════════════════════════════════════════════ */
 
-/* ── Main app body ── */
-.stApp {
-    font-size: 16px;
-    line-height: 1.75;
+:root {
+    /* Light mode defaults */
+    --ptp-bg-primary:      #ffffff;
+    --ptp-bg-secondary:    #f4f6fb;
+    --ptp-bg-card:         #ffffff;
+    --ptp-bg-input:        #ffffff;
+    --ptp-text-primary:    #1a1d2e;
+    --ptp-text-secondary:  #4a5170;
+    --ptp-text-muted:      #6b7498;
+    --ptp-border:          #d0d5e8;
+    --ptp-border-focus:    #4a6fa5;
+    --ptp-accent:          #1a56db;
+    --ptp-accent-light:    #e8f0fe;
+    --ptp-shadow:          0 2px 12px rgba(0,0,0,0.08);
+    --ptp-card-shadow:     0 4px 16px rgba(0,0,0,0.07);
+    --ptp-metric-value:    #1a56db;
+    --ptp-metric-label:    #4a5170;
+    --ptp-caption-bg:      #f0f4ff;
+    --ptp-caption-border:  #4a6fa5;
+    --ptp-caption-text:    #1e2d52;
+    --ptp-caption-strong:  #1a3a7c;
+    --ptp-caption-em:      #2a5ab0;
+    --ptp-footer-text:     #6b7498;
+    --ptp-footer-border:   #d0d5e8;
+    --ptp-hero-from:       #1f3c88;
+    --ptp-hero-to:         #0b7285;
 }
 
-/* ── Every paragraph / span / label in the whole app ── */
-.stApp p,
-.stApp span,
-.stApp label,
-.stApp div,
-.stApp li,
-.stApp h1,
-.stApp h2,
-.stApp h3,
-.stApp h4,
-.stApp h5,
-.stApp h6 {
-    color: #e8edf8 !important;
+/* Dark mode override — triggers on Streamlit dark theme */
+@media (prefers-color-scheme: dark) {
+    :root {
+        --ptp-bg-primary:      #12141f;
+        --ptp-bg-secondary:    #1a1d2e;
+        --ptp-bg-card:         #1e2140;
+        --ptp-bg-input:        #1e2140;
+        --ptp-text-primary:    #e8edf8;
+        --ptp-text-secondary:  #c5cff0;
+        --ptp-text-muted:      #9aacd8;
+        --ptp-border:          #3a4080;
+        --ptp-border-focus:    #748ffc;
+        --ptp-accent:          #748ffc;
+        --ptp-accent-light:    #1e2450;
+        --ptp-shadow:          0 2px 12px rgba(0,0,0,0.4);
+        --ptp-card-shadow:     0 4px 16px rgba(0,0,0,0.35);
+        --ptp-metric-value:    #4dd0e1;
+        --ptp-metric-label:    #9aacd8;
+        --ptp-caption-bg:      #161a33;
+        --ptp-caption-border:  #5a8bd4;
+        --ptp-caption-text:    #d0d8f0;
+        --ptp-caption-strong:  #a0c0ff;
+        --ptp-caption-em:      #7aaaf0;
+        --ptp-footer-text:     #9090bb;
+        --ptp-footer-border:   #2a2d50;
+        --ptp-hero-from:       #1f3c88;
+        --ptp-hero-to:         #0b7285;
+    }
 }
 
-/* ── Streamlit markdown blocks ── */
-.stMarkdown,
-.stMarkdown p,
-.stMarkdown span,
-.stMarkdown li,
-.stMarkdown h1,
-.stMarkdown h2,
-.stMarkdown h3 {
-    color: #e8edf8 !important;
+/* Streamlit dark theme class override (catches Streamlit's own dark toggle) */
+[data-theme="dark"] {
+    --ptp-bg-primary:      #12141f;
+    --ptp-bg-secondary:    #1a1d2e;
+    --ptp-bg-card:         #1e2140;
+    --ptp-bg-input:        #1e2140;
+    --ptp-text-primary:    #e8edf8;
+    --ptp-text-secondary:  #c5cff0;
+    --ptp-text-muted:      #9aacd8;
+    --ptp-border:          #3a4080;
+    --ptp-border-focus:    #748ffc;
+    --ptp-accent:          #748ffc;
+    --ptp-accent-light:    #1e2450;
+    --ptp-shadow:          0 2px 12px rgba(0,0,0,0.4);
+    --ptp-card-shadow:     0 4px 16px rgba(0,0,0,0.35);
+    --ptp-metric-value:    #4dd0e1;
+    --ptp-metric-label:    #9aacd8;
+    --ptp-caption-bg:      #161a33;
+    --ptp-caption-border:  #5a8bd4;
+    --ptp-caption-text:    #d0d8f0;
+    --ptp-caption-strong:  #a0c0ff;
+    --ptp-caption-em:      #7aaaf0;
+    --ptp-footer-text:     #9090bb;
+    --ptp-footer-border:   #2a2d50;
+    --ptp-hero-from:       #1f3c88;
+    --ptp-hero-to:         #0b7285;
 }
 
-/* ── Radio button labels ── */
-div[data-testid="stRadio"] label,
-div[data-testid="stRadio"] span,
-div[data-testid="stRadio"] p {
-    color: #e8edf8 !important;
+/* ══════════════════════════════════════════════════════════
+   STREAMLIT ELEMENT OVERRIDES
+   Use CSS variables so both themes work automatically.
+   We do NOT force a single text colour globally — instead
+   we only fix elements that Streamlit genuinely breaks.
+══════════════════════════════════════════════════════════ */
+
+/* Fix radio button labels — Streamlit sometimes renders
+   these with low-contrast colours */
+div[data-testid="stRadio"] label span p,
+div[data-testid="stRadio"] > label > div > label > div > p {
+    color: var(--ptp-text-primary) !important;
     font-size: 15px !important;
 }
 
-/* ── Radio group caption / helper text ── */
+/* Radio group question label */
 div[data-testid="stRadio"] > label {
-    color: #c8d4f4 !important;
+    color: var(--ptp-text-secondary) !important;
     font-size: 14px !important;
     font-weight: 500 !important;
 }
 
-/* ── Text input label ── */
+/* Text input */
 div[data-testid="stTextInput"] label,
-div[data-testid="stTextInput"] p {
-    color: #e8edf8 !important;
+div[data-testid="stTextInput"] label p {
+    color: var(--ptp-text-primary) !important;
     font-weight: 500 !important;
 }
-
-/* ── Text input placeholder & value ── */
 div[data-testid="stTextInput"] input {
-    color: #e8edf8 !important;
-    background-color: #1e2140 !important;
-    border: 1px solid #4a5580 !important;
+    color: var(--ptp-text-primary) !important;
+    background-color: var(--ptp-bg-input) !important;
+    border: 1px solid var(--ptp-border) !important;
+}
+div[data-testid="stTextInput"] input:focus {
+    border-color: var(--ptp-border-focus) !important;
+    box-shadow: 0 0 0 2px rgba(74, 111, 165, 0.15) !important;
 }
 
-/* ── File uploader label ── */
+/* File uploader */
 div[data-testid="stFileUploader"] label,
-div[data-testid="stFileUploader"] p,
+div[data-testid="stFileUploader"] label p,
 div[data-testid="stFileUploader"] span {
-    color: #e8edf8 !important;
+    color: var(--ptp-text-primary) !important;
 }
 
-/* ── Selectbox ── */
+/* Selectbox */
 div[data-testid="stSelectbox"] label,
-div[data-testid="stSelectbox"] p {
-    color: #e8edf8 !important;
+div[data-testid="stSelectbox"] label p {
+    color: var(--ptp-text-primary) !important;
 }
 
-/* ── Expander header ── */
+/* Expander header */
 details summary p,
 details summary span,
 .streamlit-expanderHeader,
 .streamlit-expanderHeader p,
 button[data-testid="stExpanderToggleButton"] p,
 button[data-testid="stExpanderToggleButton"] span {
-    color: #e8edf8 !important;
+    color: var(--ptp-text-primary) !important;
     font-weight: 600 !important;
 }
 
-/* ── st.write / st.text output ── */
-.stText,
-.stText p {
-    color: #e8edf8 !important;
-}
-
-/* ── Success / Info / Warning / Error boxes ── */
+/* Alert boxes — keep their own internal text colour */
 div[data-testid="stAlert"] p,
-div[data-testid="stAlert"] span,
-.stSuccess p,
-.stInfo p,
-.stWarning p,
-.stError p {
-    color: #111122 !important;
+div[data-testid="stAlert"] span {
+    color: inherit !important;
 }
 
-/* ── Sidebar ── */
+/* Sidebar */
 section[data-testid="stSidebar"] p,
 section[data-testid="stSidebar"] span,
 section[data-testid="stSidebar"] label,
-section[data-testid="stSidebar"] div,
 section[data-testid="stSidebar"] li {
-    color: #e8edf8 !important;
+    color: var(--ptp-text-primary) !important;
 }
 
-/* ── Dataframe / table text ── */
-.stDataFrame,
+/* Dataframe */
 .stDataFrame td,
 .stDataFrame th {
-    color: #e8edf8 !important;
+    color: var(--ptp-text-primary) !important;
 }
 
-/* ── Download button text ── */
+/* Buttons */
+.stButton button,
+.stButton button p,
 div[data-testid="stDownloadButton"] button,
 div[data-testid="stDownloadButton"] button p {
     color: #ffffff !important;
 }
 
-/* ── Generic button text ── */
-.stButton button,
-.stButton button p {
-    color: #ffffff !important;
+/* st.write paragraphs */
+.stMarkdown p,
+.stMarkdown li {
+    color: var(--ptp-text-primary) !important;
 }
 
-/* ═══════════════════════════════════════════════
+/* ══════════════════════════════════════════════════════════
    CUSTOM COMPONENTS
-═══════════════════════════════════════════════ */
+══════════════════════════════════════════════════════════ */
 
-/* ── Hero banner ── */
+/* Hero banner — always uses explicit colours (gradient bg,
+   white text) so no CSS-var needed here */
 .hero {
-    background: linear-gradient(90deg, #1f3c88, #0b7285);
+    background: linear-gradient(90deg, var(--ptp-hero-from), var(--ptp-hero-to));
     padding: 36px 40px;
     border-radius: 16px;
-    color: #ffffff;
     margin-bottom: 36px;
 }
 .hero h1 {
@@ -243,24 +292,23 @@ div[data-testid="stDownloadButton"] button p {
     margin: 0;
 }
 
-/* ── Card component ── */
+/* Card */
 .card {
-    background-color: #1e2140;
-    border: 1px solid #3a4080;
+    background-color: var(--ptp-bg-card);
+    border: 1px solid var(--ptp-border);
     padding: 28px 32px;
     border-radius: 14px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+    box-shadow: var(--ptp-card-shadow);
     margin-bottom: 28px;
-    color: #e8edf8;
 }
 
-/* ── Metric inside card ── */
+/* Metric inside card */
 .metric-label {
     font-size: 13px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: #9aacd8 !important;
+    color: var(--ptp-metric-label) !important;
     margin-bottom: 4px;
     margin-top: 18px;
 }
@@ -269,44 +317,44 @@ div[data-testid="stDownloadButton"] button p {
 .metric-value {
     font-size: 22px;
     font-weight: 700;
-    color: #4dd0e1 !important;
+    color: var(--ptp-metric-value) !important;
     margin-bottom: 2px;
 }
 
-/* ── Graph caption box ── */
+/* Graph caption box */
 .graph-caption {
-    background-color: #161a33;
-    border-left: 5px solid #5a8bd4;
+    background-color: var(--ptp-caption-bg);
+    border-left: 5px solid var(--ptp-caption-border);
     border-radius: 0 10px 10px 0;
     padding: 18px 24px;
     margin-top: 12px;
     margin-bottom: 40px;
     font-size: 15px;
     line-height: 1.9;
-    color: #d0d8f0 !important;
+    color: var(--ptp-caption-text) !important;
 }
 .graph-caption strong {
-    color: #a0c0ff !important;
+    color: var(--ptp-caption-strong) !important;
     font-weight: 700;
 }
 .graph-caption em {
-    color: #7aaaf0 !important;
+    color: var(--ptp-caption-em) !important;
     font-style: italic;
 }
 
-/* ── Section spacing ── */
+/* Section spacing */
 .section-gap {
     margin-top: 40px;
     margin-bottom: 6px;
 }
 
-/* ── Footer ── */
+/* Footer */
 .footer {
     text-align: center;
-    color: #9090bb !important;
+    color: var(--ptp-footer-text) !important;
     font-size: 14px;
     padding: 44px 20px 20px;
-    border-top: 1px solid #2a2d50;
+    border-top: 1px solid var(--ptp-footer-border);
     margin-top: 60px;
     line-height: 2.2;
 }
@@ -450,7 +498,7 @@ def gravy_score(seq):
 
 
 def show_caption(html_text: str):
-    """Render a styled, dark-mode-safe caption box below each graph."""
+    """Render a styled, theme-aware caption box below each graph."""
     st.markdown(
         f'<div class="graph-caption">{html_text}</div>',
         unsafe_allow_html=True,
@@ -685,22 +733,47 @@ def caption_distance_map(dist_matrix, seq=""):
 
 
 # ==========================================================
-# SECTION 6C - MATPLOTLIB THEME (Dark bg, white text)
+# SECTION 6C - MATPLOTLIB THEME
+# Detects Streamlit theme and adjusts plot colours
 # ==========================================================
 
+def _is_dark_mode():
+    """Best-effort dark mode detection via Streamlit's theme config."""
+    try:
+        theme = st.get_option("theme.base")
+        return theme == "dark"
+    except Exception:
+        return False
+
+
 def get_plot_colors():
-    return {
-        "fig_bg":  "#1a1d2e",
-        "ax_bg":   "#1e2140",
-        "text":    "#e8edf8",
-        "grid":    "#2e3560",
-        "accent1": "#5c7cfa",
-        "accent2": "#748ffc",
-        "accent3": "#4dd0e1",
-        "red":     "#ff6b6b",
-        "orange":  "#ffa94d",
-        "tick":    "#c5cff0",
-    }
+    dark = _is_dark_mode()
+    if dark:
+        return {
+            "fig_bg":  "#1a1d2e",
+            "ax_bg":   "#1e2140",
+            "text":    "#e8edf8",
+            "grid":    "#2e3560",
+            "accent1": "#5c7cfa",
+            "accent2": "#748ffc",
+            "accent3": "#4dd0e1",
+            "red":     "#ff6b6b",
+            "orange":  "#ffa94d",
+            "tick":    "#c5cff0",
+        }
+    else:
+        return {
+            "fig_bg":  "#f8f9fc",
+            "ax_bg":   "#ffffff",
+            "text":    "#1a1d2e",
+            "grid":    "#d0d5e8",
+            "accent1": "#1a56db",
+            "accent2": "#4361ee",
+            "accent3": "#0b7285",
+            "red":     "#c0392b",
+            "orange":  "#e67e22",
+            "tick":    "#4a5170",
+        }
 
 
 def apply_plot_style(fig, axes_list):
@@ -841,12 +914,13 @@ def plot_confusion(y_true, y_pred, class_names, title, cmap):
     n   = len(class_names)
     fig, ax = plt.subplots(figsize=(max(6, n * 0.75), max(5, n * 0.6)))
     apply_plot_style(fig, [ax])
+    annot_color = "#111122" if not _is_dark_mode() else "#ffffff"
     sns.heatmap(
         cm, annot=True, fmt="d", cmap=cmap,
         xticklabels=class_names,
         yticklabels=class_names,
         ax=ax, linewidths=0.4, linecolor=C["grid"],
-        annot_kws={"size": 11, "color": "#111122"},
+        annot_kws={"size": 11, "color": annot_color},
     )
     ax.set_title(
         f"{title}  —  Accuracy: {acc * 100:.1f}%",
@@ -854,7 +928,6 @@ def plot_confusion(y_true, y_pred, class_names, title, cmap):
     )
     ax.set_xlabel("Predicted", fontsize=12, labelpad=10)
     ax.set_ylabel("True",      fontsize=12, labelpad=10)
-    # Colorbar text
     cbar = ax.collections[0].colorbar
     cbar.ax.yaxis.label.set_color(C["text"])
     cbar.ax.tick_params(colors=C["text"])
@@ -882,11 +955,12 @@ def plot_docking(y_true, y_pred):
     ax.plot(lims, lims, color=C["red"], linestyle="--", lw=1.8, label="Perfect fit")
     ax.set_xlim(lims)
     ax.set_ylim(lims)
+    box_bg = C["fig_bg"]
     ax.annotate(
         f"R² = {r2:.3f}\nRMSE = {rmse:.2f} kcal/mol",
         xy=(0.05, 0.87), xycoords="axes fraction", fontsize=11,
         color=C["text"],
-        bbox=dict(boxstyle="round,pad=0.5", fc="#1e2140", ec="#4a5580", alpha=0.95),
+        bbox=dict(boxstyle="round,pad=0.5", fc=box_bg, ec=C["grid"], alpha=0.95),
     )
     ax.set_xlabel("True Docking Score (kcal/mol)",      fontsize=12, labelpad=10)
     ax.set_ylabel("Predicted Docking Score (kcal/mol)", fontsize=12, labelpad=10)
@@ -928,7 +1002,7 @@ def plot_distributions(df):
     fig, axes = plt.subplots(1, 3, figsize=(16, 5))
     apply_plot_style(fig, axes)
 
-    # — Length histogram
+    # Length histogram
     axes[0].hist(seq_lengths, bins=20,
                  color=C["accent1"], edgecolor=C["grid"], alpha=0.85)
     mean_len = np.mean(seq_lengths)
@@ -941,7 +1015,7 @@ def plot_distributions(df):
     leg0 = axes[0].legend(fontsize=9, facecolor=C["fig_bg"], edgecolor=C["grid"])
     for t in leg0.get_texts(): t.set_color(C["text"])
 
-    # — Taste bar chart
+    # Taste bar chart
     n_cls      = len(taste_counts)
     bar_colors = plt.cm.get_cmap("tab20", n_cls)(np.linspace(0, 1, n_cls))
     axes[1].barh(taste_counts.index, taste_counts.values,
@@ -955,7 +1029,7 @@ def plot_distributions(df):
         axes[1].text(v + 0.3, i, str(v), va="center",
                      fontsize=9, color=C["text"])
 
-    # — GRAVY histogram
+    # GRAVY histogram
     axes[2].hist(gravy_vals, bins=20,
                  color=C["accent2"], edgecolor=C["grid"], alpha=0.85)
     axes[2].axvline(0, color=C["red"], linestyle="--", lw=2,
@@ -1347,7 +1421,7 @@ if st.session_state.show_analytics:
         for k, v in metrics.items():
             st.write(f"**{k}**: {round(v, 4)}")
 
-        # ── Dataset Distributions ──────────────────────────────────────────
+        # Dataset Distributions
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 📊 Dataset Distributions")
         fig_dist = plot_distributions(df_all)
@@ -1356,7 +1430,7 @@ if st.session_state.show_analytics:
         plt.close(fig_dist)
         show_caption(caption_distributions(df_all))
 
-        # ── PCA ────────────────────────────────────────────────────────────
+        # PCA
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 🔹 PCA: Peptide Feature Space (coloured by taste)")
         fig_pca, pca_model = plot_pca(
@@ -1368,7 +1442,7 @@ if st.session_state.show_analytics:
         plt.close(fig_pca)
         show_caption(caption_pca(pca_model, le_taste.classes_))
 
-        # ── Confusion Matrix — Taste ───────────────────────────────────────
+        # Confusion Matrix — Taste
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 🔹 Confusion Matrix — Taste (test set)")
         taste_preds  = taste_model.predict(X_test)
@@ -1381,7 +1455,7 @@ if st.session_state.show_analytics:
         plt.close(fig_cm_taste)
         show_caption(caption_confusion_taste(yt_test, taste_preds, le_taste.classes_))
 
-        # ── Confusion Matrix — Solubility ──────────────────────────────────
+        # Confusion Matrix — Solubility
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 🔹 Confusion Matrix — Solubility (test set)")
         sol_preds  = sol_model.predict(X_test)
@@ -1394,7 +1468,7 @@ if st.session_state.show_analytics:
         plt.close(fig_cm_sol)
         show_caption(caption_confusion_sol(ys_test, sol_preds, le_sol.classes_))
 
-        # ── Feature Importance ─────────────────────────────────────────────
+        # Feature Importance
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 🔹 Feature Importance — Taste Model")
         fig_imp = plot_feature_importance(taste_model, X_all.columns, top_n=20)
@@ -1403,7 +1477,7 @@ if st.session_state.show_analytics:
         plt.close(fig_imp)
         show_caption(caption_feature_importance(taste_model, X_all.columns, top_n=20))
 
-        # ── Docking Scatter ────────────────────────────────────────────────
+        # Docking Scatter
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 🔹 Docking Score: True vs Predicted (test set)")
         dock_preds = dock_model.predict(X_test)
