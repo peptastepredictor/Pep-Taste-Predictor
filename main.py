@@ -57,7 +57,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-DATASET_PATH = "AIML (4).xlsx"
+DATASET_PATH = "AIML.xlsx"
 AA = "ACDEFGHIKLMNPQRSTVWY"
 
 ALL_DIPEPTIDES = [a1 + a2 for a1 in AA for a2 in AA]
