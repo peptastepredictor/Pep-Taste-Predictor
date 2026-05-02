@@ -1,6 +1,7 @@
 # ==========================================================
 # PepTastePredictor — app.py
 # A complete end-to-end peptide analysis platform
+# Dark-mode compatible version
 # ==========================================================
 
 # ==========================================================
@@ -70,28 +71,124 @@ KD_SCALE = {
 
 
 # ==========================================================
-# SECTION 3 - FRONTEND STYLING
+# SECTION 3 - FRONTEND STYLING (Dark Mode Compatible)
 # ==========================================================
 
 st.markdown(
     """
 <style>
 
+/* ── CSS Variables for light/dark mode ── */
+:root {
+    --text-primary: #1a1a2e;
+    --text-secondary: #4a5580;
+    --text-muted: #444466;
+    --bg-card: #f0f4ff;
+    --bg-card-border: #c8d4f0;
+    --bg-caption: #f0f4ff;
+    --caption-border: #3a6bc4;
+    --caption-strong: #0f2060;
+    --caption-em: #1f4090;
+    --metric-label: #4a5580;
+    --metric-value: #0b7285;
+    --hero-bg-start: #1f3c88;
+    --hero-bg-end: #0b7285;
+    --footer-border: #dde4f0;
+    --footer-text: #444466;
+}
+
+/* Dark mode overrides */
+@media (prefers-color-scheme: dark) {
+    :root {
+        --text-primary: #e8eaf6;
+        --text-secondary: #b0bce8;
+        --text-muted: #9090bb;
+        --bg-card: #1e2140;
+        --bg-card-border: #3a4080;
+        --bg-caption: #1a1f3a;
+        --caption-border: #5a8bd4;
+        --caption-strong: #a0c0ff;
+        --caption-em: #7aaaf0;
+        --metric-label: #9aacd8;
+        --metric-value: #4dd0e1;
+        --footer-border: #2a2d50;
+        --footer-text: #9090bb;
+    }
+}
+
+/* Streamlit dark mode detection via data attribute */
+[data-theme="dark"] {
+    --text-primary: #e8eaf6;
+    --text-secondary: #b0bce8;
+    --text-muted: #9090bb;
+    --bg-card: #1e2140;
+    --bg-card-border: #3a4080;
+    --bg-caption: #1a1f3a;
+    --caption-border: #5a8bd4;
+    --caption-strong: #a0c0ff;
+    --caption-em: #7aaaf0;
+    --metric-label: #9aacd8;
+    --metric-value: #4dd0e1;
+    --footer-border: #2a2d50;
+    --footer-text: #9090bb;
+}
+
+/* Force dark mode when Streamlit sets dark theme */
+.stApp[data-theme="dark"] .card,
+html[data-theme="dark"] .card {
+    background-color: #1e2140 !important;
+    border-color: #3a4080 !important;
+    color: #e8eaf6 !important;
+}
+
+html[data-theme="dark"] .graph-caption,
+.stApp[data-theme="dark"] .graph-caption {
+    background-color: #1a1f3a !important;
+    color: #e8eaf6 !important;
+}
+
+html[data-theme="dark"] .metric-label,
+.stApp[data-theme="dark"] .metric-label {
+    color: #9aacd8 !important;
+}
+
+html[data-theme="dark"] .metric-value,
+.stApp[data-theme="dark"] .metric-value {
+    color: #4dd0e1 !important;
+}
+
+html[data-theme="dark"] .footer,
+.stApp[data-theme="dark"] .footer {
+    border-color: #2a2d50 !important;
+    color: #9090bb !important;
+}
+
+html[data-theme="dark"] .graph-caption strong,
+.stApp[data-theme="dark"] .graph-caption strong {
+    color: #a0c0ff !important;
+}
+
+html[data-theme="dark"] .graph-caption em,
+.stApp[data-theme="dark"] .graph-caption em {
+    color: #7aaaf0 !important;
+}
+
 /* ── Global body text ── */
 body, .stApp {
     font-size: 16px;
     line-height: 1.75;
-    color: #1a1a2e;
+    color: var(--text-primary);
 }
 
 /* ── Card component ── */
 .card {
-    background-color: #f0f4ff;
-    border: 1px solid #c8d4f0;
+    background-color: var(--bg-card);
+    border: 1px solid var(--bg-card-border);
     padding: 28px 32px;
     border-radius: 14px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.07);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
     margin-bottom: 28px;
+    color: var(--text-primary);
 }
 
 /* ── Hero banner ── */
@@ -122,7 +219,7 @@ body, .stApp {
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: #4a5580;
+    color: var(--metric-label);
     margin-bottom: 4px;
     margin-top: 18px;
 }
@@ -132,28 +229,28 @@ body, .stApp {
 .metric-value {
     font-size: 22px;
     font-weight: 700;
-    color: #0b7285;
+    color: var(--metric-value);
     margin-bottom: 2px;
 }
 
 /* ── Graph caption box ── */
 .graph-caption {
-    background-color: #f0f4ff;
-    border-left: 5px solid #3a6bc4;
+    background-color: var(--bg-caption);
+    border-left: 5px solid var(--caption-border);
     border-radius: 0 10px 10px 0;
     padding: 18px 24px;
     margin-top: 12px;
     margin-bottom: 40px;
     font-size: 15px;
     line-height: 1.9;
-    color: #1a1a2e;
+    color: var(--text-primary);
 }
 .graph-caption strong {
-    color: #0f2060;
+    color: var(--caption-strong);
     font-weight: 700;
 }
 .graph-caption em {
-    color: #1f4090;
+    color: var(--caption-em);
     font-style: italic;
 }
 
@@ -166,10 +263,10 @@ body, .stApp {
 /* ── Footer ── */
 .footer {
     text-align: center;
-    color: #444466;
+    color: var(--footer-text);
     font-size: 14px;
     padding: 44px 20px 20px;
-    border-top: 1px solid #dde4f0;
+    border-top: 1px solid var(--footer-border);
     margin-top: 60px;
     line-height: 2.2;
 }
@@ -178,8 +275,46 @@ body, .stApp {
 .stMarkdown p {
     font-size: 16px;
     line-height: 1.8;
-    color: #1a1a2e;
+    color: var(--text-primary);
     margin-bottom: 12px;
+}
+
+/* ── Ensure all st.write text is visible ── */
+.stMarkdown, .stText, p, label, span {
+    color: var(--text-primary) !important;
+}
+
+/* ── Sidebar text visibility ── */
+.stSidebar .stMarkdown p,
+.stSidebar p,
+.stSidebar span,
+.stSidebar label {
+    color: var(--text-primary) !important;
+}
+
+/* ── Input labels ── */
+.stTextInput label,
+.stFileUploader label,
+.stRadio label,
+.stSelectbox label {
+    color: var(--text-primary) !important;
+    font-weight: 500;
+}
+
+/* ── Radio button text ── */
+.stRadio div[role="radiogroup"] label {
+    color: var(--text-primary) !important;
+}
+
+/* ── Expander header ── */
+.streamlit-expanderHeader {
+    color: var(--text-primary) !important;
+    font-weight: 600;
+}
+
+/* ── Success/info/warning boxes ── */
+.stSuccess, .stInfo, .stWarning, .stError {
+    color: var(--text-primary) !important;
 }
 
 </style>
@@ -321,7 +456,7 @@ def gravy_score(seq):
 
 
 def show_caption(html_text: str):
-    """Render a styled, dark-text caption box below each graph."""
+    """Render a styled, dark-mode-safe caption box below each graph."""
     st.markdown(
         f'<div class="graph-caption">{html_text}</div>',
         unsafe_allow_html=True,
@@ -556,6 +691,39 @@ def caption_distance_map(dist_matrix, seq=""):
 
 
 # ==========================================================
+# SECTION 6C - DARK MODE AWARE MATPLOTLIB THEME
+# ==========================================================
+
+def get_plot_colors():
+    """Return a dict of colors that work in both light and dark mode."""
+    return {
+        "fig_bg":       "#ffffff",
+        "ax_bg":        "#fafbff",
+        "text":         "#1a1a2e",
+        "grid":         "#e0e4f0",
+        "accent1":      "#1f3c88",
+        "accent2":      "#5c6bc0",
+        "accent3":      "#0b7285",
+        "red":          "#e74c3c",
+        "orange":       "#f39c12",
+        "tick":         "#222233",
+    }
+
+def apply_plot_style(fig, axes_list):
+    """Apply consistent, always-visible style to matplotlib figures."""
+    C = get_plot_colors()
+    fig.patch.set_facecolor(C["fig_bg"])
+    for ax in axes_list:
+        ax.set_facecolor(C["ax_bg"])
+        ax.tick_params(colors=C["tick"], labelsize=10)
+        ax.xaxis.label.set_color(C["text"])
+        ax.yaxis.label.set_color(C["text"])
+        ax.title.set_color(C["text"])
+        for spine in ax.spines.values():
+            spine.set_edgecolor(C["grid"])
+
+
+# ==========================================================
 # SECTION 7 - STRUCTURE GENERATION & ANALYSIS
 # ==========================================================
 
@@ -635,18 +803,18 @@ def ca_rmsd(pdb_text):
 
 
 # ==========================================================
-# SECTION 8 - PLOT FUNCTIONS
+# SECTION 8 - PLOT FUNCTIONS (Dark Mode Safe)
 # ==========================================================
 
 def plot_pca(X, y_labels, class_names, title="PCA"):
+    C = get_plot_colors()
     pca    = PCA(n_components=2)
     coords = pca.fit_transform(X)
     var1   = pca.explained_variance_ratio_[0] * 100
     var2   = pca.explained_variance_ratio_[1] * 100
     palette = plt.cm.get_cmap("tab20", len(class_names))
     fig, ax = plt.subplots(figsize=(9, 6))
-    fig.patch.set_facecolor("#ffffff")
-    ax.set_facecolor("#fafbff")
+    apply_plot_style(fig, [ax])
     for i, cls in enumerate(class_names):
         mask = y_labels == i
         ax.scatter(
@@ -654,25 +822,28 @@ def plot_pca(X, y_labels, class_names, title="PCA"):
             label=cls, alpha=0.75, s=35,
             color=palette(i), edgecolors="white", linewidths=0.3,
         )
-    ax.set_xlabel(f"PC1 ({var1:.1f}% variance)", fontsize=12, color="#1a1a2e", labelpad=10)
-    ax.set_ylabel(f"PC2 ({var2:.1f}% variance)", fontsize=12, color="#1a1a2e", labelpad=10)
-    ax.set_title(title, fontsize=13, color="#1a1a2e", fontweight="bold", pad=12)
-    ax.tick_params(colors="#333344", labelsize=10)
+    ax.set_xlabel(f"PC1 ({var1:.1f}% variance)", fontsize=12, labelpad=10)
+    ax.set_ylabel(f"PC2 ({var2:.1f}% variance)", fontsize=12, labelpad=10)
+    ax.set_title(title, fontsize=13, fontweight="bold", pad=12)
     ax.legend(
         fontsize=8, bbox_to_anchor=(1.02, 1),
         loc="upper left", borderaxespad=0,
         title="Taste class", title_fontsize=9,
+        labelcolor=C["text"],
+        facecolor=C["fig_bg"],
+        edgecolor=C["grid"],
     )
     plt.tight_layout()
     return fig, pca
 
 
 def plot_confusion(y_true, y_pred, class_names, title, cmap):
+    C = get_plot_colors()
     cm  = confusion_matrix(y_true, y_pred)
     acc = accuracy_score(y_true, y_pred)
     n   = len(class_names)
     fig, ax = plt.subplots(figsize=(max(6, n * 0.75), max(5, n * 0.6)))
-    fig.patch.set_facecolor("#ffffff")
+    apply_plot_style(fig, [ax])
     sns.heatmap(
         cm, annot=True, fmt="d", cmap=cmap,
         xticklabels=class_names,
@@ -682,11 +853,10 @@ def plot_confusion(y_true, y_pred, class_names, title, cmap):
     )
     ax.set_title(
         f"{title}  —  Accuracy: {acc * 100:.1f}%",
-        fontsize=14, color="#1a1a2e", fontweight="bold", pad=14,
+        fontsize=14, fontweight="bold", pad=14,
     )
-    ax.set_xlabel("Predicted", fontsize=12, color="#1a1a2e", labelpad=10)
-    ax.set_ylabel("True",      fontsize=12, color="#1a1a2e", labelpad=10)
-    ax.tick_params(colors="#222233", labelsize=9)
+    ax.set_xlabel("Predicted", fontsize=12, labelpad=10)
+    ax.set_ylabel("True",      fontsize=12, labelpad=10)
     plt.xticks(rotation=45, ha="right", fontsize=9)
     plt.yticks(rotation=0,  fontsize=9)
     plt.tight_layout()
@@ -694,6 +864,7 @@ def plot_confusion(y_true, y_pred, class_names, title, cmap):
 
 
 def plot_docking(y_true, y_pred):
+    C = get_plot_colors()
     r2   = r2_score(y_true, y_pred)
     rmse = np.sqrt(mean_squared_error(y_true, y_pred))
     lims = [
@@ -701,11 +872,11 @@ def plot_docking(y_true, y_pred):
         max(y_true.max(), y_pred.max()) + 1,
     ]
     fig, ax = plt.subplots(figsize=(6, 6))
-    fig.patch.set_facecolor("#ffffff")
-    ax.set_facecolor("#fafbff")
+    apply_plot_style(fig, [ax])
     ax.scatter(
         y_true, y_pred, alpha=0.65,
-        edgecolors="#1a1a2e", linewidths=0.4, color="#1f3c88", s=45,
+        edgecolors=C["text"], linewidths=0.4,
+        color=C["accent1"], s=45,
     )
     ax.plot(lims, lims, "r--", lw=1.8, label="Perfect fit")
     ax.set_xlim(lims)
@@ -713,95 +884,99 @@ def plot_docking(y_true, y_pred):
     ax.annotate(
         f"R² = {r2:.3f}\nRMSE = {rmse:.2f} kcal/mol",
         xy=(0.05, 0.87), xycoords="axes fraction", fontsize=11,
-        color="#1a1a2e",
+        color=C["text"],
         bbox=dict(boxstyle="round,pad=0.5", fc="#fff9e6", ec="#aaaaaa", alpha=0.95),
     )
-    ax.set_xlabel("True Docking Score (kcal/mol)",      fontsize=12, color="#1a1a2e", labelpad=10)
-    ax.set_ylabel("Predicted Docking Score (kcal/mol)", fontsize=12, color="#1a1a2e", labelpad=10)
-    ax.set_title("Docking: True vs Predicted (test set)", fontsize=13, color="#1a1a2e",
+    ax.set_xlabel("True Docking Score (kcal/mol)",      fontsize=12, labelpad=10)
+    ax.set_ylabel("Predicted Docking Score (kcal/mol)", fontsize=12, labelpad=10)
+    ax.set_title("Docking: True vs Predicted (test set)", fontsize=13,
                  fontweight="bold", pad=12)
-    ax.tick_params(colors="#222233", labelsize=10)
-    ax.legend(fontsize=10)
+    ax.legend(fontsize=10, facecolor=C["fig_bg"], edgecolor=C["grid"], labelcolor=C["text"])
     plt.tight_layout()
     return fig
 
 
 def plot_feature_importance(model, feature_names, top_n=20):
+    C = get_plot_colors()
     imp = pd.DataFrame({
         "Feature":    [prettify_feature(f) for f in feature_names],
         "Importance": model.feature_importances_,
     }).sort_values("Importance", ascending=False).head(top_n)
     colors = plt.cm.Blues(np.linspace(0.4, 0.9, len(imp))[::-1])
     fig, ax = plt.subplots(figsize=(8, 7))
-    fig.patch.set_facecolor("#ffffff")
-    ax.set_facecolor("#fafbff")
-    ax.barh(imp["Feature"][::-1], imp["Importance"][::-1], color=colors, edgecolor="white")
-    ax.set_xlabel("Importance Score", fontsize=12, color="#1a1a2e", labelpad=10)
-    ax.set_title(f"Top {top_n} Features — Taste Model", fontsize=13, color="#1a1a2e",
+    apply_plot_style(fig, [ax])
+    ax.barh(imp["Feature"][::-1], imp["Importance"][::-1],
+            color=colors, edgecolor="white")
+    ax.set_xlabel("Importance Score", fontsize=12, labelpad=10)
+    ax.set_title(f"Top {top_n} Features — Taste Model", fontsize=13,
                  fontweight="bold", pad=12)
-    ax.tick_params(axis="y", labelsize=10, colors="#1a1a2e")
-    ax.tick_params(axis="x", labelsize=10, colors="#1a1a2e")
+    # Make y-axis tick labels clearly visible
+    ax.tick_params(axis="y", labelsize=10)
+    ax.tick_params(axis="x", labelsize=10)
     plt.tight_layout()
     return fig
 
 
 def plot_distributions(df):
+    C = get_plot_colors()
     seq_lengths  = [len(s) for s in df["peptide"]]
     taste_counts = df["taste"].value_counts()
     gravy_vals   = [gravy_score(s) for s in df["peptide"]]
 
     fig, axes = plt.subplots(1, 3, figsize=(16, 5))
-    fig.patch.set_facecolor("#ffffff")
+    apply_plot_style(fig, axes)
 
     # — Length histogram
-    axes[0].set_facecolor("#fafbff")
-    axes[0].hist(seq_lengths, bins=20, color="#1f3c88", edgecolor="white", alpha=0.85)
+    axes[0].hist(seq_lengths, bins=20,
+                 color=C["accent1"], edgecolor="white", alpha=0.85)
     mean_len = np.mean(seq_lengths)
-    axes[0].axvline(mean_len, color="#e74c3c", linestyle="--", lw=2,
+    axes[0].axvline(mean_len, color=C["red"], linestyle="--", lw=2,
                     label=f"Mean = {mean_len:.1f} aa")
-    axes[0].set_xlabel("Sequence Length (aa)", fontsize=11, color="#1a1a2e", labelpad=8)
-    axes[0].set_ylabel("Count",                fontsize=11, color="#1a1a2e", labelpad=8)
-    axes[0].set_title("Peptide Length Distribution", fontsize=12, color="#1a1a2e",
+    axes[0].set_xlabel("Sequence Length (aa)", fontsize=11, labelpad=8)
+    axes[0].set_ylabel("Count",                fontsize=11, labelpad=8)
+    axes[0].set_title("Peptide Length Distribution", fontsize=12,
                       fontweight="bold", pad=10)
-    axes[0].tick_params(colors="#222233", labelsize=10)
-    axes[0].legend(fontsize=9)
+    axes[0].legend(fontsize=9,
+                   facecolor=C["fig_bg"], edgecolor=C["grid"],
+                   labelcolor=C["text"])
 
     # — Taste bar chart
-    axes[1].set_facecolor("#fafbff")
     n_cls      = len(taste_counts)
     bar_colors = plt.cm.get_cmap("tab20", n_cls)(np.linspace(0, 1, n_cls))
     axes[1].barh(taste_counts.index, taste_counts.values,
                  color=bar_colors, edgecolor="white", alpha=0.9)
-    axes[1].set_xlabel("Number of Peptides", fontsize=11, color="#1a1a2e", labelpad=8)
-    axes[1].set_title("Taste Class Distribution", fontsize=12, color="#1a1a2e",
+    axes[1].set_xlabel("Number of Peptides", fontsize=11, labelpad=8)
+    axes[1].set_title("Taste Class Distribution", fontsize=12,
                       fontweight="bold", pad=10)
-    axes[1].tick_params(axis="y", labelsize=9,  colors="#1a1a2e")
-    axes[1].tick_params(axis="x", labelsize=9,  colors="#1a1a2e")
+    axes[1].tick_params(axis="y", labelsize=9)
+    axes[1].tick_params(axis="x", labelsize=9)
     for i, v in enumerate(taste_counts.values):
-        axes[1].text(v + 0.3, i, str(v), va="center", fontsize=9, color="#1a1a2e")
+        axes[1].text(v + 0.3, i, str(v), va="center",
+                     fontsize=9, color=C["text"])
 
     # — GRAVY histogram
-    axes[2].set_facecolor("#fafbff")
-    axes[2].hist(gravy_vals, bins=20, color="#5c6bc0", edgecolor="white", alpha=0.85)
-    axes[2].axvline(0, color="#e74c3c", linestyle="--", lw=2,
+    axes[2].hist(gravy_vals, bins=20,
+                 color=C["accent2"], edgecolor="white", alpha=0.85)
+    axes[2].axvline(0, color=C["red"], linestyle="--", lw=2,
                     label="Hydrophilic | Hydrophobic")
-    axes[2].axvline(np.mean(gravy_vals), color="#f39c12", linestyle="--", lw=2,
+    axes[2].axvline(np.mean(gravy_vals), color=C["orange"], linestyle="--", lw=2,
                     label=f"Mean = {np.mean(gravy_vals):.2f}")
-    axes[2].set_xlabel("GRAVY Score", fontsize=11, color="#1a1a2e", labelpad=8)
-    axes[2].set_ylabel("Count",       fontsize=11, color="#1a1a2e", labelpad=8)
-    axes[2].set_title("GRAVY Hydrophobicity Distribution", fontsize=12, color="#1a1a2e",
+    axes[2].set_xlabel("GRAVY Score", fontsize=11, labelpad=8)
+    axes[2].set_ylabel("Count",       fontsize=11, labelpad=8)
+    axes[2].set_title("GRAVY Hydrophobicity Distribution", fontsize=12,
                       fontweight="bold", pad=10)
-    axes[2].tick_params(colors="#222233", labelsize=10)
-    axes[2].legend(fontsize=8)
+    axes[2].legend(fontsize=8,
+                   facecolor=C["fig_bg"], edgecolor=C["grid"],
+                   labelcolor=C["text"])
 
     plt.tight_layout(pad=2.5)
     return fig
 
 
 def plot_ramachandran(phi_psi):
+    C = get_plot_colors()
     fig, ax = plt.subplots(figsize=(6, 6))
-    fig.patch.set_facecolor("#ffffff")
-    ax.set_facecolor("#f8f9ff")
+    apply_plot_style(fig, [ax])
     ax.fill([-180, -180, -45, -45, -180], [-75, -45, -45, -75, -75],
             color="#4CAF50", alpha=0.2, label="α-helix (allowed)")
     ax.fill([-180, -180, -90, -90, -180], [90, 180, 180, 90, 90],
@@ -816,12 +991,12 @@ def plot_ramachandran(phi_psi):
     ax.axvline(0, color="#888899", lw=0.6, linestyle="--")
     ax.set_xlim(-180, 180)
     ax.set_ylim(-180, 180)
-    ax.set_xlabel("Phi φ (°)", fontsize=12, color="#1a1a2e", labelpad=10)
-    ax.set_ylabel("Psi ψ (°)", fontsize=12, color="#1a1a2e", labelpad=10)
-    ax.set_title("Ramachandran Plot", fontsize=13, color="#1a1a2e",
-                 fontweight="bold", pad=12)
-    ax.tick_params(colors="#222233", labelsize=10)
-    ax.legend(fontsize=9, loc="upper right")
+    ax.set_xlabel("Phi φ (°)", fontsize=12, labelpad=10)
+    ax.set_ylabel("Psi ψ (°)", fontsize=12, labelpad=10)
+    ax.set_title("Ramachandran Plot", fontsize=13, fontweight="bold", pad=12)
+    ax.legend(fontsize=9, loc="upper right",
+              facecolor=C["fig_bg"], edgecolor=C["grid"],
+              labelcolor=C["text"])
     ax.set_xticks(range(-180, 181, 60))
     ax.set_yticks(range(-180, 181, 60))
     plt.tight_layout()
@@ -829,6 +1004,7 @@ def plot_ramachandran(phi_psi):
 
 
 def plot_distance_map(dist_matrix, seq=""):
+    C = get_plot_colors()
     n = dist_matrix.shape[0]
     if seq and len(seq) == n:
         labels = [f"{aa}{i+1}" for i, aa in enumerate(seq)]
@@ -838,17 +1014,19 @@ def plot_distance_map(dist_matrix, seq=""):
     show_labels = [labels[i] if i % tick_step == 0 else "" for i in range(n)]
     size        = max(5, n * 0.3 + 2)
     fig, ax     = plt.subplots(figsize=(size, size))
-    fig.patch.set_facecolor("#ffffff")
+    apply_plot_style(fig, [ax])
     sns.heatmap(
         dist_matrix, cmap="viridis", ax=ax,
         xticklabels=show_labels, yticklabels=show_labels,
         linewidths=0, cbar_kws={"label": "Distance (Å)"},
     )
-    ax.set_title("Cα Distance Map", fontsize=13, color="#1a1a2e",
-                 fontweight="bold", pad=12)
-    ax.set_xlabel("Residue", fontsize=12, color="#1a1a2e", labelpad=10)
-    ax.set_ylabel("Residue", fontsize=12, color="#1a1a2e", labelpad=10)
-    ax.tick_params(colors="#222233")
+    ax.set_title("Cα Distance Map", fontsize=13, fontweight="bold", pad=12)
+    ax.set_xlabel("Residue", fontsize=12, labelpad=10)
+    ax.set_ylabel("Residue", fontsize=12, labelpad=10)
+    # Make colorbar label visible
+    cbar = ax.collections[0].colorbar
+    cbar.ax.yaxis.label.set_color(C["text"])
+    cbar.ax.tick_params(colors=C["text"])
     plt.xticks(rotation=45, ha="right", fontsize=8)
     plt.yticks(rotation=0,  fontsize=8)
     plt.tight_layout()
