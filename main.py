@@ -79,25 +79,26 @@ st.markdown(
 <style>
 
 /* ══════════════════════════════════════════════════════════
-   CSS CUSTOM PROPERTIES — adapts to light and dark themes
-   automatically using prefers-color-scheme + Streamlit's
-   own theme body class.
+   STRATEGY: We detect Streamlit's theme via the
+   [data-theme] attribute on <html> or <body>.
+   Light mode = no override needed (browser defaults fine).
+   Dark mode  = we set dark vars on :root.
+   This is more reliable than prefers-color-scheme because
+   Streamlit can be toggled independently of OS theme.
+
+   KEY RULE FOR INPUTS & BUTTONS:
+   Never override colour on interactive elements unless
+   Streamlit forces the wrong one. Let Streamlit handle
+   its own widget colours — only fix what's actually broken.
 ══════════════════════════════════════════════════════════ */
 
+/* ── Light mode base (default, no media query needed) ── */
 :root {
-    /* Light mode defaults */
-    --ptp-bg-primary:      #ffffff;
-    --ptp-bg-secondary:    #f4f6fb;
     --ptp-bg-card:         #ffffff;
-    --ptp-bg-input:        #ffffff;
     --ptp-text-primary:    #1a1d2e;
     --ptp-text-secondary:  #4a5170;
     --ptp-text-muted:      #6b7498;
     --ptp-border:          #d0d5e8;
-    --ptp-border-focus:    #4a6fa5;
-    --ptp-accent:          #1a56db;
-    --ptp-accent-light:    #e8f0fe;
-    --ptp-shadow:          0 2px 12px rgba(0,0,0,0.08);
     --ptp-card-shadow:     0 4px 16px rgba(0,0,0,0.07);
     --ptp-metric-value:    #1a56db;
     --ptp-metric-label:    #4a5170;
@@ -108,54 +109,17 @@ st.markdown(
     --ptp-caption-em:      #2a5ab0;
     --ptp-footer-text:     #6b7498;
     --ptp-footer-border:   #d0d5e8;
-    --ptp-hero-from:       #1f3c88;
-    --ptp-hero-to:         #0b7285;
 }
 
-/* Dark mode override — triggers on Streamlit dark theme */
-@media (prefers-color-scheme: dark) {
-    :root {
-        --ptp-bg-primary:      #12141f;
-        --ptp-bg-secondary:    #1a1d2e;
-        --ptp-bg-card:         #1e2140;
-        --ptp-bg-input:        #1e2140;
-        --ptp-text-primary:    #e8edf8;
-        --ptp-text-secondary:  #c5cff0;
-        --ptp-text-muted:      #9aacd8;
-        --ptp-border:          #3a4080;
-        --ptp-border-focus:    #748ffc;
-        --ptp-accent:          #748ffc;
-        --ptp-accent-light:    #1e2450;
-        --ptp-shadow:          0 2px 12px rgba(0,0,0,0.4);
-        --ptp-card-shadow:     0 4px 16px rgba(0,0,0,0.35);
-        --ptp-metric-value:    #4dd0e1;
-        --ptp-metric-label:    #9aacd8;
-        --ptp-caption-bg:      #161a33;
-        --ptp-caption-border:  #5a8bd4;
-        --ptp-caption-text:    #d0d8f0;
-        --ptp-caption-strong:  #a0c0ff;
-        --ptp-caption-em:      #7aaaf0;
-        --ptp-footer-text:     #9090bb;
-        --ptp-footer-border:   #2a2d50;
-        --ptp-hero-from:       #1f3c88;
-        --ptp-hero-to:         #0b7285;
-    }
-}
-
-/* Streamlit dark theme class override (catches Streamlit's own dark toggle) */
-[data-theme="dark"] {
-    --ptp-bg-primary:      #12141f;
-    --ptp-bg-secondary:    #1a1d2e;
+/* ── Dark mode override (Streamlit sets data-theme on <body> or <html>) ── */
+[data-theme="dark"],
+html[data-theme="dark"],
+body[data-theme="dark"] {
     --ptp-bg-card:         #1e2140;
-    --ptp-bg-input:        #1e2140;
     --ptp-text-primary:    #e8edf8;
     --ptp-text-secondary:  #c5cff0;
     --ptp-text-muted:      #9aacd8;
     --ptp-border:          #3a4080;
-    --ptp-border-focus:    #748ffc;
-    --ptp-accent:          #748ffc;
-    --ptp-accent-light:    #1e2450;
-    --ptp-shadow:          0 2px 12px rgba(0,0,0,0.4);
     --ptp-card-shadow:     0 4px 16px rgba(0,0,0,0.35);
     --ptp-metric-value:    #4dd0e1;
     --ptp-metric-label:    #9aacd8;
@@ -166,79 +130,105 @@ st.markdown(
     --ptp-caption-em:      #7aaaf0;
     --ptp-footer-text:     #9090bb;
     --ptp-footer-border:   #2a2d50;
-    --ptp-hero-from:       #1f3c88;
-    --ptp-hero-to:         #0b7285;
+}
+
+/* Also catch dark via OS preference as fallback */
+@media (prefers-color-scheme: dark) {
+    :root {
+        --ptp-bg-card:         #1e2140;
+        --ptp-text-primary:    #e8edf8;
+        --ptp-text-secondary:  #c5cff0;
+        --ptp-text-muted:      #9aacd8;
+        --ptp-border:          #3a4080;
+        --ptp-card-shadow:     0 4px 16px rgba(0,0,0,0.35);
+        --ptp-metric-value:    #4dd0e1;
+        --ptp-metric-label:    #9aacd8;
+        --ptp-caption-bg:      #161a33;
+        --ptp-caption-border:  #5a8bd4;
+        --ptp-caption-text:    #d0d8f0;
+        --ptp-caption-strong:  #a0c0ff;
+        --ptp-caption-em:      #7aaaf0;
+        --ptp-footer-text:     #9090bb;
+        --ptp-footer-border:   #2a2d50;
+    }
 }
 
 /* ══════════════════════════════════════════════════════════
-   STREAMLIT ELEMENT OVERRIDES
-   Use CSS variables so both themes work automatically.
-   We do NOT force a single text colour globally — instead
-   we only fix elements that Streamlit genuinely breaks.
+   STREAMLIT ELEMENT FIXES
+   Rule: Only override colour when Streamlit gets it wrong.
+   Do NOT touch input text, button text, or widget colours
+   unless specifically broken — Streamlit handles those fine.
 ══════════════════════════════════════════════════════════ */
 
-/* Fix radio button labels — Streamlit sometimes renders
-   these with low-contrast colours */
-div[data-testid="stRadio"] label span p,
-div[data-testid="stRadio"] > label > div > label > div > p {
+/* Radio option text — Streamlit sometimes loses contrast */
+div[data-testid="stRadio"] label span,
+div[data-testid="stRadio"] label p {
     color: var(--ptp-text-primary) !important;
     font-size: 15px !important;
 }
 
-/* Radio group question label */
-div[data-testid="stRadio"] > label {
+/* Radio group heading */
+div[data-testid="stRadio"] > div > label {
     color: var(--ptp-text-secondary) !important;
     font-size: 14px !important;
-    font-weight: 500 !important;
 }
 
-/* Text input */
-div[data-testid="stTextInput"] label,
-div[data-testid="stTextInput"] label p {
+/* Text input LABEL only (not the input value — browser handles that) */
+div[data-testid="stTextInput"] > label,
+div[data-testid="stTextInput"] > label > p {
     color: var(--ptp-text-primary) !important;
     font-weight: 500 !important;
 }
+
+/* Text input VALUE — must be explicitly set or it goes invisible
+   in dark mode. We set it per-theme. */
 div[data-testid="stTextInput"] input {
-    color: var(--ptp-text-primary) !important;
-    background-color: var(--ptp-bg-input) !important;
-    border: 1px solid var(--ptp-border) !important;
-}
-div[data-testid="stTextInput"] input:focus {
-    border-color: var(--ptp-border-focus) !important;
-    box-shadow: 0 0 0 2px rgba(74, 111, 165, 0.15) !important;
+    color: #1a1d2e !important;
+    background-color: #ffffff !important;
 }
 
-/* File uploader */
-div[data-testid="stFileUploader"] label,
+/* Dark mode input fix */
+[data-theme="dark"] div[data-testid="stTextInput"] input {
+    color: #e8edf8 !important;
+    background-color: #1e2140 !important;
+    border-color: #3a4080 !important;
+}
+@media (prefers-color-scheme: dark) {
+    div[data-testid="stTextInput"] input {
+        color: #e8edf8 !important;
+        background-color: #1e2140 !important;
+    }
+}
+
+/* File uploader label */
 div[data-testid="stFileUploader"] label p,
-div[data-testid="stFileUploader"] span {
+div[data-testid="stFileUploader"] > label {
     color: var(--ptp-text-primary) !important;
 }
 
-/* Selectbox */
-div[data-testid="stSelectbox"] label,
-div[data-testid="stSelectbox"] label p {
+/* File uploader drag-and-drop zone text */
+div[data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] span,
+div[data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] p,
+div[data-testid="stFileUploader"] small {
+    color: var(--ptp-text-secondary) !important;
+}
+
+/* Selectbox label */
+div[data-testid="stSelectbox"] > label,
+div[data-testid="stSelectbox"] > label > p {
     color: var(--ptp-text-primary) !important;
 }
 
 /* Expander header */
 details summary p,
 details summary span,
-.streamlit-expanderHeader,
-.streamlit-expanderHeader p,
 button[data-testid="stExpanderToggleButton"] p,
 button[data-testid="stExpanderToggleButton"] span {
     color: var(--ptp-text-primary) !important;
     font-weight: 600 !important;
 }
 
-/* Alert boxes — keep their own internal text colour */
-div[data-testid="stAlert"] p,
-div[data-testid="stAlert"] span {
-    color: inherit !important;
-}
-
-/* Sidebar */
+/* Sidebar text */
 section[data-testid="stSidebar"] p,
 section[data-testid="stSidebar"] span,
 section[data-testid="stSidebar"] label,
@@ -246,34 +236,45 @@ section[data-testid="stSidebar"] li {
     color: var(--ptp-text-primary) !important;
 }
 
-/* Dataframe */
+/* st.write / st.markdown paragraphs */
+.stMarkdown p,
+.stMarkdown li,
+.stMarkdown h1,
+.stMarkdown h2,
+.stMarkdown h3 {
+    color: var(--ptp-text-primary) !important;
+}
+
+/* Dataframe cells */
 .stDataFrame td,
 .stDataFrame th {
     color: var(--ptp-text-primary) !important;
 }
 
-/* Buttons */
-.stButton button,
-.stButton button p,
-div[data-testid="stDownloadButton"] button,
-div[data-testid="stDownloadButton"] button p {
-    color: #ffffff !important;
-}
+/* ── BUTTONS ──────────────────────────────────────────────
+   IMPORTANT: Do NOT force white text here.
+   Light mode Streamlit buttons are dark-text on light bg.
+   Dark mode Streamlit buttons are light-text on dark bg.
+   Streamlit handles this correctly by default — we must
+   NOT override button colour or it breaks one of the modes.
+   Only style our *custom* HTML buttons, not Streamlit's.
+─────────────────────────────────────────────────────────── */
 
-/* st.write paragraphs */
-.stMarkdown p,
-.stMarkdown li {
-    color: var(--ptp-text-primary) !important;
+/* Download button — Streamlit renders these with its own
+   primary colour. Let Streamlit handle the text colour. */
+
+/* Alert boxes — never override, Streamlit handles correctly */
+div[data-testid="stAlert"] * {
+    color: inherit !important;
 }
 
 /* ══════════════════════════════════════════════════════════
-   CUSTOM COMPONENTS
+   CUSTOM HTML COMPONENTS
 ══════════════════════════════════════════════════════════ */
 
-/* Hero banner — always uses explicit colours (gradient bg,
-   white text) so no CSS-var needed here */
+/* Hero banner */
 .hero {
-    background: linear-gradient(90deg, var(--ptp-hero-from), var(--ptp-hero-to));
+    background: linear-gradient(90deg, #1f3c88, #0b7285);
     padding: 36px 40px;
     border-radius: 16px;
     margin-bottom: 36px;
@@ -292,7 +293,7 @@ div[data-testid="stDownloadButton"] button p {
     margin: 0;
 }
 
-/* Card */
+/* Prediction result card */
 .card {
     background-color: var(--ptp-bg-card);
     border: 1px solid var(--ptp-border);
@@ -302,7 +303,6 @@ div[data-testid="stDownloadButton"] button p {
     margin-bottom: 28px;
 }
 
-/* Metric inside card */
 .metric-label {
     font-size: 13px;
     font-weight: 600;
@@ -321,7 +321,7 @@ div[data-testid="stDownloadButton"] button p {
     margin-bottom: 2px;
 }
 
-/* Graph caption box */
+/* Graph caption */
 .graph-caption {
     background-color: var(--ptp-caption-bg);
     border-left: 5px solid var(--ptp-caption-border);
