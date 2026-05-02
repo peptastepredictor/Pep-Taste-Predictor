@@ -79,200 +79,85 @@ st.markdown(
 <style>
 
 /* ══════════════════════════════════════════════════════════
-   STRATEGY: We detect Streamlit's theme via the
-   [data-theme] attribute on <html> or <body>.
-   Light mode = no override needed (browser defaults fine).
-   Dark mode  = we set dark vars on :root.
-   This is more reliable than prefers-color-scheme because
-   Streamlit can be toggled independently of OS theme.
-
-   KEY RULE FOR INPUTS & BUTTONS:
-   Never override colour on interactive elements unless
-   Streamlit forces the wrong one. Let Streamlit handle
-   its own widget colours — only fix what's actually broken.
+   UNIVERSAL FIX — var(--text-color) is injected by
+   Streamlit itself and is always correct for the current
+   theme (dark or light). Using it everywhere means we never
+   fight against Streamlit's own theme system.
 ══════════════════════════════════════════════════════════ */
 
-/* ── Light mode base (default, no media query needed) ── */
-:root {
-    --ptp-bg-card:         #ffffff;
-    --ptp-text-primary:    #1a1d2e;
-    --ptp-text-secondary:  #4a5170;
-    --ptp-text-muted:      #6b7498;
-    --ptp-border:          #d0d5e8;
-    --ptp-card-shadow:     0 4px 16px rgba(0,0,0,0.07);
-    --ptp-metric-value:    #1a56db;
-    --ptp-metric-label:    #4a5170;
-    --ptp-caption-bg:      #f0f4ff;
-    --ptp-caption-border:  #4a6fa5;
-    --ptp-caption-text:    #1e2d52;
-    --ptp-caption-strong:  #1a3a7c;
-    --ptp-caption-em:      #2a5ab0;
-    --ptp-footer-text:     #6b7498;
-    --ptp-footer-border:   #d0d5e8;
+/* Every text element in the app */
+.stApp p, .stApp span, .stApp label,
+.stApp li, .stApp h1, .stApp h2, .stApp h3,
+.stApp h4, .stApp h5, .stApp div {
+    color: var(--text-color) !important;
 }
+.stMarkdown, .stMarkdown * { color: var(--text-color) !important; }
+h1, h2, h3, h4 { color: var(--text-color) !important; }
 
-/* ── Dark mode override (Streamlit sets data-theme on <body> or <html>) ── */
-[data-theme="dark"],
-html[data-theme="dark"],
-body[data-theme="dark"] {
-    --ptp-bg-card:         #1e2140;
-    --ptp-text-primary:    #e8edf8;
-    --ptp-text-secondary:  #c5cff0;
-    --ptp-text-muted:      #9aacd8;
-    --ptp-border:          #3a4080;
-    --ptp-card-shadow:     0 4px 16px rgba(0,0,0,0.35);
-    --ptp-metric-value:    #4dd0e1;
-    --ptp-metric-label:    #9aacd8;
-    --ptp-caption-bg:      #161a33;
-    --ptp-caption-border:  #5a8bd4;
-    --ptp-caption-text:    #d0d8f0;
-    --ptp-caption-strong:  #a0c0ff;
-    --ptp-caption-em:      #7aaaf0;
-    --ptp-footer-text:     #9090bb;
-    --ptp-footer-border:   #2a2d50;
-}
-
-/* Also catch dark via OS preference as fallback */
-@media (prefers-color-scheme: dark) {
-    :root {
-        --ptp-bg-card:         #1e2140;
-        --ptp-text-primary:    #e8edf8;
-        --ptp-text-secondary:  #c5cff0;
-        --ptp-text-muted:      #9aacd8;
-        --ptp-border:          #3a4080;
-        --ptp-card-shadow:     0 4px 16px rgba(0,0,0,0.35);
-        --ptp-metric-value:    #4dd0e1;
-        --ptp-metric-label:    #9aacd8;
-        --ptp-caption-bg:      #161a33;
-        --ptp-caption-border:  #5a8bd4;
-        --ptp-caption-text:    #d0d8f0;
-        --ptp-caption-strong:  #a0c0ff;
-        --ptp-caption-em:      #7aaaf0;
-        --ptp-footer-text:     #9090bb;
-        --ptp-footer-border:   #2a2d50;
-    }
-}
-
-/* ══════════════════════════════════════════════════════════
-   STREAMLIT ELEMENT FIXES
-   Rule: Only override colour when Streamlit gets it wrong.
-   Do NOT touch input text, button text, or widget colours
-   unless specifically broken — Streamlit handles those fine.
-══════════════════════════════════════════════════════════ */
-
-/* Radio option text — Streamlit sometimes loses contrast */
+/* Radio */
+div[data-testid="stRadio"] label,
 div[data-testid="stRadio"] label span,
-div[data-testid="stRadio"] label p {
-    color: var(--ptp-text-primary) !important;
-    font-size: 15px !important;
-}
+div[data-testid="stRadio"] label p { color: var(--text-color) !important; }
 
-/* Radio group heading */
-div[data-testid="stRadio"] > div > label {
-    color: var(--ptp-text-secondary) !important;
-    font-size: 14px !important;
-}
+/* Text input label */
+div[data-testid="stTextInput"] label,
+div[data-testid="stTextInput"] label p { color: var(--text-color) !important; }
 
-/* Text input LABEL only (not the input value — browser handles that) */
-div[data-testid="stTextInput"] > label,
-div[data-testid="stTextInput"] > label > p {
-    color: var(--ptp-text-primary) !important;
-    font-weight: 500 !important;
-}
+/* Text input VALUE — the typed text inside the box */
+div[data-testid="stTextInput"] input,
+div[data-testid="stTextInput"] input::placeholder { color: var(--text-color) !important; }
 
-/* Text input VALUE — must be explicitly set or it goes invisible
-   in dark mode. We set it per-theme. */
-div[data-testid="stTextInput"] input {
-    color: #1a1d2e !important;
-    background-color: #ffffff !important;
-}
-
-/* Dark mode input fix */
-[data-theme="dark"] div[data-testid="stTextInput"] input {
-    color: #e8edf8 !important;
-    background-color: #1e2140 !important;
-    border-color: #3a4080 !important;
-}
-@media (prefers-color-scheme: dark) {
-    div[data-testid="stTextInput"] input {
-        color: #e8edf8 !important;
-        background-color: #1e2140 !important;
-    }
-}
-
-/* File uploader label */
+/* File uploader */
+div[data-testid="stFileUploader"] label,
 div[data-testid="stFileUploader"] label p,
-div[data-testid="stFileUploader"] > label {
-    color: var(--ptp-text-primary) !important;
-}
+div[data-testid="stFileUploader"] span,
+div[data-testid="stFileUploader"] p,
+div[data-testid="stFileUploader"] small,
+div[data-testid="stFileUploaderDropzone"] span,
+div[data-testid="stFileUploaderDropzone"] p { color: var(--text-color) !important; }
 
-/* File uploader drag-and-drop zone text */
-div[data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] span,
-div[data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] p,
-div[data-testid="stFileUploader"] small {
-    color: var(--ptp-text-secondary) !important;
-}
+/* Selectbox */
+div[data-testid="stSelectbox"] label,
+div[data-testid="stSelectbox"] label p { color: var(--text-color) !important; }
 
-/* Selectbox label */
-div[data-testid="stSelectbox"] > label,
-div[data-testid="stSelectbox"] > label > p {
-    color: var(--ptp-text-primary) !important;
-}
-
-/* Expander header */
-details summary p,
-details summary span,
+/* Expander */
+details summary p, details summary span,
 button[data-testid="stExpanderToggleButton"] p,
-button[data-testid="stExpanderToggleButton"] span {
-    color: var(--ptp-text-primary) !important;
-    font-weight: 600 !important;
-}
+button[data-testid="stExpanderToggleButton"] span,
+button[data-testid="stExpanderToggleButton"] div { color: var(--text-color) !important; }
 
-/* Sidebar text */
+/* Sidebar */
+section[data-testid="stSidebar"],
 section[data-testid="stSidebar"] p,
 section[data-testid="stSidebar"] span,
 section[data-testid="stSidebar"] label,
-section[data-testid="stSidebar"] li {
-    color: var(--ptp-text-primary) !important;
-}
+section[data-testid="stSidebar"] li,
+section[data-testid="stSidebar"] div,
+section[data-testid="stSidebar"] h1,
+section[data-testid="stSidebar"] h2,
+section[data-testid="stSidebar"] h3 { color: var(--text-color) !important; }
 
-/* st.write / st.markdown paragraphs */
-.stMarkdown p,
-.stMarkdown li,
-.stMarkdown h1,
-.stMarkdown h2,
-.stMarkdown h3 {
-    color: var(--ptp-text-primary) !important;
-}
+/* DataFrames */
+.stDataFrame, .stDataFrame td, .stDataFrame th,
+[data-testid="stDataFrame"] * { color: var(--text-color) !important; }
 
-/* Dataframe cells */
-.stDataFrame td,
-.stDataFrame th {
-    color: var(--ptp-text-primary) !important;
-}
+/* Metric widgets */
+[data-testid="stMetric"] label,
+[data-testid="stMetric"] div { color: var(--text-color) !important; }
 
-/* ── BUTTONS ──────────────────────────────────────────────
-   IMPORTANT: Do NOT force white text here.
-   Light mode Streamlit buttons are dark-text on light bg.
-   Dark mode Streamlit buttons are light-text on dark bg.
-   Streamlit handles this correctly by default — we must
-   NOT override button colour or it breaks one of the modes.
-   Only style our *custom* HTML buttons, not Streamlit's.
-─────────────────────────────────────────────────────────── */
+/* Buttons — inherit so Streamlit's own colour applies correctly */
+.stButton button p,
+div[data-testid="stDownloadButton"] button p { color: inherit !important; }
 
-/* Download button — Streamlit renders these with its own
-   primary colour. Let Streamlit handle the text colour. */
-
-/* Alert boxes — never override, Streamlit handles correctly */
-div[data-testid="stAlert"] * {
-    color: inherit !important;
-}
+/* Alert boxes — never override */
+div[data-testid="stAlert"] *,
+div[data-testid="stAlert"] p,
+div[data-testid="stAlert"] span { color: inherit !important; }
 
 /* ══════════════════════════════════════════════════════════
    CUSTOM HTML COMPONENTS
 ══════════════════════════════════════════════════════════ */
 
-/* Hero banner */
 .hero {
     background: linear-gradient(90deg, #1f3c88, #0b7285);
     padding: 36px 40px;
@@ -280,89 +165,85 @@ div[data-testid="stAlert"] * {
     margin-bottom: 36px;
 }
 .hero h1 {
-    font-size: 2.2rem;
-    font-weight: 700;
+    font-size: 2.2rem !important;
+    font-weight: 700 !important;
     margin-bottom: 10px;
     color: #ffffff !important;
     letter-spacing: -0.5px;
 }
 .hero p {
-    font-size: 1.05rem;
+    font-size: 1.05rem !important;
     line-height: 1.7;
     color: #dce8ff !important;
     margin: 0;
 }
 
-/* Prediction result card */
 .card {
-    background-color: var(--ptp-bg-card);
-    border: 1px solid var(--ptp-border);
+    border: 1px solid rgba(128,128,180,0.3);
     padding: 28px 32px;
     border-radius: 14px;
-    box-shadow: var(--ptp-card-shadow);
     margin-bottom: 28px;
+    background: rgba(128,128,180,0.05);
 }
 
 .metric-label {
-    font-size: 13px;
-    font-weight: 600;
+    font-size: 13px !important;
+    font-weight: 600 !important;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: var(--ptp-metric-label) !important;
+    opacity: 0.7;
     margin-bottom: 4px;
     margin-top: 18px;
+    color: var(--text-color) !important;
 }
 .metric-label:first-child { margin-top: 0; }
 
 .metric-value {
-    font-size: 22px;
-    font-weight: 700;
-    color: var(--ptp-metric-value) !important;
+    font-size: 22px !important;
+    font-weight: 700 !important;
+    color: #1a8fd1 !important;
     margin-bottom: 2px;
 }
 
-/* Graph caption */
 .graph-caption {
-    background-color: var(--ptp-caption-bg);
-    border-left: 5px solid var(--ptp-caption-border);
+    border-left: 5px solid #4a6fa5;
     border-radius: 0 10px 10px 0;
     padding: 18px 24px;
     margin-top: 12px;
     margin-bottom: 40px;
-    font-size: 15px;
+    font-size: 15px !important;
     line-height: 1.9;
-    color: var(--ptp-caption-text) !important;
+    background: rgba(74,111,165,0.08);
+    color: var(--text-color) !important;
 }
 .graph-caption strong {
-    color: var(--ptp-caption-strong) !important;
     font-weight: 700;
+    color: var(--text-color) !important;
 }
 .graph-caption em {
-    color: var(--ptp-caption-em) !important;
     font-style: italic;
+    color: var(--text-color) !important;
+    opacity: 0.85;
 }
 
-/* Section spacing */
-.section-gap {
-    margin-top: 40px;
-    margin-bottom: 6px;
-}
+.section-gap { margin-top: 40px; margin-bottom: 6px; }
 
-/* Footer */
 .footer {
     text-align: center;
-    color: var(--ptp-footer-text) !important;
-    font-size: 14px;
+    font-size: 14px !important;
     padding: 44px 20px 20px;
-    border-top: 1px solid var(--ptp-footer-border);
     margin-top: 60px;
     line-height: 2.2;
+    border-top: 1px solid rgba(128,128,180,0.25);
+    color: var(--text-color) !important;
+    opacity: 0.7;
 }
 
 </style>
 """,
     unsafe_allow_html=True,
 )
+
 
 
 # ==========================================================
