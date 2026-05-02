@@ -76,31 +76,112 @@ KD_SCALE = {
 st.markdown(
     """
 <style>
-.card {
-    background-color: var(--secondary-background-color);
-    padding: 22px;
-    border-radius: 14px;
-    box-shadow: 0 6px 18px rgba(0,0,0,0.08);
-    margin-bottom: 20px;
+
+/* ── Global body text ── */
+body, .stApp {
+    font-size: 16px;
+    line-height: 1.75;
+    color: #1a1a2e;
 }
+
+/* ── Card component ── */
+.card {
+    background-color: #f0f4ff;
+    border: 1px solid #c8d4f0;
+    padding: 28px 32px;
+    border-radius: 14px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.07);
+    margin-bottom: 28px;
+}
+
+/* ── Hero banner ── */
 .hero {
     background: linear-gradient(90deg, #1f3c88, #0b7285);
-    padding: 30px;
+    padding: 36px 40px;
     border-radius: 16px;
-    color: white;
-    margin-bottom: 30px;
+    color: #ffffff;
+    margin-bottom: 36px;
 }
-.metric {
-    font-size: 20px;
+.hero h1 {
+    font-size: 2.2rem;
+    font-weight: 700;
+    margin-bottom: 10px;
+    color: #ffffff !important;
+    letter-spacing: -0.5px;
+}
+.hero p {
+    font-size: 1.05rem;
+    line-height: 1.7;
+    color: #dce8ff !important;
+    margin: 0;
+}
+
+/* ── Metric label inside card ── */
+.metric-label {
+    font-size: 13px;
     font-weight: 600;
-    color: #0b7285;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #4a5580;
+    margin-bottom: 4px;
+    margin-top: 18px;
 }
+.metric-label:first-child {
+    margin-top: 0;
+}
+.metric-value {
+    font-size: 22px;
+    font-weight: 700;
+    color: #0b7285;
+    margin-bottom: 2px;
+}
+
+/* ── Graph caption box ── */
+.graph-caption {
+    background-color: #f0f4ff;
+    border-left: 5px solid #3a6bc4;
+    border-radius: 0 10px 10px 0;
+    padding: 18px 24px;
+    margin-top: 12px;
+    margin-bottom: 40px;
+    font-size: 15px;
+    line-height: 1.9;
+    color: #1a1a2e;
+}
+.graph-caption strong {
+    color: #0f2060;
+    font-weight: 700;
+}
+.graph-caption em {
+    color: #1f4090;
+    font-style: italic;
+}
+
+/* ── Section spacing helper ── */
+.section-gap {
+    margin-top: 40px;
+    margin-bottom: 6px;
+}
+
+/* ── Footer ── */
 .footer {
     text-align: center;
-    color: #888;
-    font-size: 13px;
-    padding: 30px;
+    color: #444466;
+    font-size: 14px;
+    padding: 44px 20px 20px;
+    border-top: 1px solid #dde4f0;
+    margin-top: 60px;
+    line-height: 2.2;
 }
+
+/* ── Streamlit paragraph text ── */
+.stMarkdown p {
+    font-size: 16px;
+    line-height: 1.8;
+    color: #1a1a2e;
+    margin-bottom: 12px;
+}
+
 </style>
 """,
     unsafe_allow_html=True,
@@ -239,87 +320,122 @@ def gravy_score(seq):
     return sum(KD_SCALE.get(a, 0) for a in seq) / len(seq)
 
 
+def show_caption(html_text: str):
+    """Render a styled, dark-text caption box below each graph."""
+    st.markdown(
+        f'<div class="graph-caption">{html_text}</div>',
+        unsafe_allow_html=True,
+    )
+
+
 # ==========================================================
 # SECTION 6B - DYNAMIC CAPTION HELPERS
 # ==========================================================
 
 def caption_distributions(df):
-    seq_lengths = [len(s) for s in df["peptide"]]
-    gravy_vals  = [gravy_score(s) for s in df["peptide"]]
-    mean_len    = np.mean(seq_lengths)
-    min_len     = int(np.min(seq_lengths))
-    max_len     = int(np.max(seq_lengths))
+    seq_lengths    = [len(s) for s in df["peptide"]]
+    gravy_vals     = [gravy_score(s) for s in df["peptide"]]
+    mean_len       = np.mean(seq_lengths)
+    min_len        = int(np.min(seq_lengths))
+    max_len        = int(np.max(seq_lengths))
     dominant_taste = df["taste"].value_counts().idxmax()
     dominant_count = df["taste"].value_counts().max()
-    n_classes   = df["taste"].nunique()
-    mean_gravy  = np.mean(gravy_vals)
-    gravy_label = "slightly hydrophobic" if mean_gravy > 0.2 else (
-                  "slightly hydrophilic" if mean_gravy < -0.2 else "amphipathic (near-neutral)")
+    n_classes      = df["taste"].nunique()
+    mean_gravy     = np.mean(gravy_vals)
+    gravy_label    = (
+        "slightly hydrophobic" if mean_gravy > 0.2 else
+        "slightly hydrophilic" if mean_gravy < -0.2 else
+        "amphipathic (near-neutral)"
+    )
     return (
-        f"**Length distribution (left):** Peptide lengths range from {min_len} to {max_len} aa, "
-        f"with a mean of {mean_len:.1f} aa. "
-        f"**Taste classes (centre):** '{dominant_taste}' is the most represented class "
-        f"({dominant_count} peptides out of {len(df)} across {n_classes} classes) — "
-        f"imbalances here are why the model uses class weighting during training. "
-        f"**GRAVY distribution (right):** The dataset's mean GRAVY score is {mean_gravy:.2f}, "
-        f"indicating the average peptide is {gravy_label}. "
+        f"<strong>Length distribution (left):</strong> "
+        f"Peptide lengths range from <strong>{min_len}</strong> to <strong>{max_len} aa</strong>, "
+        f"with a mean of <strong>{mean_len:.1f} aa</strong>. "
+        f"Most peptides are short — very long sequences are rare in this dataset.<br><br>"
+
+        f"<strong>Taste classes (centre):</strong> "
+        f"&ldquo;{dominant_taste}&rdquo; is the most represented class "
+        f"(<strong>{dominant_count}</strong> peptides out of {len(df)} total, "
+        f"across {n_classes} classes). "
+        f"Class imbalances like this are why the model uses balanced class weighting during training.<br><br>"
+
+        f"<strong>GRAVY distribution (right):</strong> "
+        f"The dataset's mean GRAVY score is <strong>{mean_gravy:.2f}</strong>, "
+        f"indicating the average peptide is <strong>{gravy_label}</strong>. "
         f"Scores above 0 lean hydrophobic; below 0 lean hydrophilic."
     )
 
 
 def caption_pca(pca_model, class_names):
-    var1 = pca_model.explained_variance_ratio_[0] * 100
-    var2 = pca_model.explained_variance_ratio_[1] * 100
+    var1  = pca_model.explained_variance_ratio_[0] * 100
+    var2  = pca_model.explained_variance_ratio_[1] * 100
     total = var1 + var2
     return (
-        f"Each dot is one peptide compressed from hundreds of features into 2 dimensions. "
-        f"PC1 captures {var1:.1f}% of variance and PC2 captures {var2:.1f}% "
-        f"(together {total:.1f}% of total variance). "
-        f"Tight, well-separated colour clusters mean the model can cleanly distinguish those taste classes. "
-        f"Overlapping clusters (e.g. classes that share similar amino acid profiles) are harder for the model "
-        f"to separate — expect higher confusion between those classes in the confusion matrix."
+        f"Each dot represents one peptide, compressed from hundreds of physicochemical features "
+        f"down to just 2 dimensions for visualisation.<br><br>"
+
+        f"<strong>PC1</strong> captures <strong>{var1:.1f}%</strong> of the total variance and "
+        f"<strong>PC2</strong> captures <strong>{var2:.1f}%</strong> — "
+        f"together accounting for <strong>{total:.1f}%</strong> of all variation in the dataset.<br><br>"
+
+        f"<strong>Tight, well-separated colour clusters</strong> mean the model can reliably distinguish "
+        f"those taste classes. "
+        f"<strong>Overlapping clusters</strong> indicate classes that share similar amino acid profiles — "
+        f"expect higher confusion between those classes in the confusion matrix below."
     )
 
 
 def caption_confusion_taste(y_true, y_pred, class_names):
-    acc = accuracy_score(y_true, y_pred) * 100
-    cm  = confusion_matrix(y_true, y_pred)
-    # Find most confused off-diagonal pair
+    acc     = accuracy_score(y_true, y_pred) * 100
+    cm      = confusion_matrix(y_true, y_pred)
     cm_copy = cm.astype(float)
     np.fill_diagonal(cm_copy, 0)
-    idx = np.unravel_index(np.argmax(cm_copy), cm_copy.shape)
-    true_cls  = class_names[idx[0]]
-    pred_cls  = class_names[idx[1]]
-    worst_n   = int(cm_copy[idx])
-    # Best and worst performing classes
+    idx           = np.unravel_index(np.argmax(cm_copy), cm_copy.shape)
+    true_cls      = class_names[idx[0]]
+    pred_cls      = class_names[idx[1]]
+    worst_n       = int(cm_copy[idx])
     per_class_acc = cm.diagonal() / cm.sum(axis=1)
-    best_cls  = class_names[np.argmax(per_class_acc)]
-    worst_cls = class_names[np.argmin(per_class_acc)]
+    best_cls      = class_names[np.argmax(per_class_acc)]
+    worst_cls     = class_names[np.argmin(per_class_acc)]
     return (
-        f"The taste model achieved **{acc:.1f}% accuracy** on the held-out test set. "
-        f"Rows = actual taste class, columns = predicted class; diagonal numbers are correct predictions. "
-        f"The most common confusion: actual **'{true_cls}'** was predicted as **'{pred_cls}'** "
-        f"{worst_n} time(s) — likely because they share similar physicochemical profiles. "
-        f"Best-classified class: **'{best_cls}'** (highest per-class accuracy). "
-        f"Hardest-to-classify class: **'{worst_cls}'** (most off-diagonal errors)."
+        f"The taste model achieved <strong>{acc:.1f}% overall accuracy</strong> "
+        f"on the held-out test set.<br><br>"
+
+        f"<strong>How to read this chart:</strong> Rows = actual taste class, "
+        f"Columns = what the model predicted. "
+        f"Numbers on the <em>diagonal</em> are correct predictions. "
+        f"Off-diagonal numbers are mistakes.<br><br>"
+
+        f"<strong>Most common confusion:</strong> Actual &ldquo;{true_cls}&rdquo; was predicted as "
+        f"&ldquo;{pred_cls}&rdquo; <strong>{worst_n} time(s)</strong> — "
+        f"likely because these two classes share similar physicochemical profiles.<br><br>"
+
+        f"<strong>Best-classified class:</strong> &ldquo;{best_cls}&rdquo; "
+        f"(highest per-class accuracy) &nbsp;&nbsp;|&nbsp;&nbsp; "
+        f"<strong>Hardest class:</strong> &ldquo;{worst_cls}&rdquo; (most off-diagonal errors)."
     )
 
 
 def caption_confusion_sol(y_true, y_pred, class_names):
-    acc = accuracy_score(y_true, y_pred) * 100
-    cm  = confusion_matrix(y_true, y_pred)
+    acc     = accuracy_score(y_true, y_pred) * 100
+    cm      = confusion_matrix(y_true, y_pred)
     cm_copy = cm.astype(float)
     np.fill_diagonal(cm_copy, 0)
-    idx = np.unravel_index(np.argmax(cm_copy), cm_copy.shape)
+    idx      = np.unravel_index(np.argmax(cm_copy), cm_copy.shape)
     true_cls = class_names[idx[0]]
     pred_cls = class_names[idx[1]]
     worst_n  = int(cm_copy[idx])
     return (
-        f"The solubility model achieved **{acc:.1f}% accuracy** on the held-out test set. "
-        f"The most common misclassification: actual **'{true_cls}'** predicted as **'{pred_cls}'** "
-        f"({worst_n} time(s)). "
-        f"These errors typically occur for peptides with borderline hydrophobicity scores that fall "
-        f"close to the solubility decision boundary."
+        f"The solubility model achieved <strong>{acc:.1f}% overall accuracy</strong> "
+        f"on the held-out test set.<br><br>"
+
+        f"<strong>Most common misclassification:</strong> "
+        f"Actual &ldquo;{true_cls}&rdquo; was predicted as "
+        f"&ldquo;{pred_cls}&rdquo; <strong>{worst_n} time(s)</strong>.<br><br>"
+
+        f"These errors typically occur for peptides with borderline hydrophobicity scores "
+        f"that fall close to the solubility decision boundary — "
+        f"neither clearly soluble nor clearly insoluble."
     )
 
 
@@ -328,61 +444,79 @@ def caption_feature_importance(model, feature_names, top_n=20):
         "Feature":    feature_names,
         "Importance": model.feature_importances_,
     }).sort_values("Importance", ascending=False).head(top_n)
-    top3 = [prettify_feature(f) for f in imp["Feature"].iloc[:3]]
+    top3        = [prettify_feature(f) for f in imp["Feature"].iloc[:3]]
     top3_scores = imp["Importance"].iloc[:3].tolist()
-    n_dpc = sum(1 for f in imp["Feature"] if f.startswith("DPC_"))
-    n_aa  = sum(1 for f in imp["Feature"] if f.startswith("AA_"))
+    n_dpc       = sum(1 for f in imp["Feature"] if f.startswith("DPC_"))
+    n_aa        = sum(1 for f in imp["Feature"] if f.startswith("AA_"))
+    dpc_note    = (
+        "Dipeptide patterns dominate — meaning <em>sequential context</em> "
+        "matters more than raw composition alone."
+        if n_dpc > n_aa else
+        "Single amino acid composition is the stronger predictor here."
+    )
     return (
-        f"The top {top_n} features driving the taste model's decisions. "
-        f"**#1:** {top3[0]} (importance {top3_scores[0]:.4f}), "
-        f"**#2:** {top3[1]} (importance {top3_scores[1]:.4f}), "
-        f"**#3:** {top3[2]} (importance {top3_scores[2]:.4f}). "
-        f"Of the top {top_n}: {n_dpc} are dipeptide frequency features and {n_aa} are single amino acid "
-        f"frequency features — {'dipeptide patterns dominate, meaning sequential context matters more than raw composition' if n_dpc > n_aa else 'amino acid composition is the stronger predictor here'}."
+        f"The top {top_n} features driving the taste model's decisions, "
+        f"ranked by importance score.<br><br>"
+
+        f"<strong>#1 &mdash; {top3[0]}</strong> &nbsp; (score: {top3_scores[0]:.4f})<br>"
+        f"<strong>#2 &mdash; {top3[1]}</strong> &nbsp; (score: {top3_scores[1]:.4f})<br>"
+        f"<strong>#3 &mdash; {top3[2]}</strong> &nbsp; (score: {top3_scores[2]:.4f})<br><br>"
+
+        f"Of the top {top_n}: <strong>{n_dpc}</strong> are dipeptide frequency features (DPC) and "
+        f"<strong>{n_aa}</strong> are single amino acid frequency features. "
+        f"{dpc_note}"
     )
 
 
 def caption_docking(y_true, y_pred):
-    r2   = r2_score(y_true, y_pred)
-    rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+    r2        = r2_score(y_true, y_pred)
+    rmse      = np.sqrt(mean_squared_error(y_true, y_pred))
     min_score = y_true.min()
     max_score = y_true.max()
-    quality = "strong" if r2 >= 0.75 else ("moderate" if r2 >= 0.5 else "weak")
+    quality   = "strong" if r2 >= 0.75 else ("moderate" if r2 >= 0.5 else "weak")
     return (
-        f"Each point is a peptide from the held-out test set. "
-        f"The red dashed line is the ideal (perfect prediction) reference. "
-        f"**R² = {r2:.3f}** indicates a {quality} fit — the model explains "
-        f"{r2*100:.1f}% of variance in docking scores. "
-        f"**RMSE = {rmse:.2f} kcal/mol** is the typical prediction error. "
-        f"True docking scores in this test set range from {min_score:.2f} to {max_score:.2f} kcal/mol. "
-        f"Points above the diagonal = the model over-estimated binding affinity; "
-        f"points below = under-estimated."
+        f"Each point is one peptide from the held-out test set. "
+        f"The <strong>red dashed line</strong> is the ideal reference — "
+        f"a perfect model would place all points exactly on this line.<br><br>"
+
+        f"<strong>R² = {r2:.3f}</strong> — indicates a <strong>{quality} fit</strong>. "
+        f"The model explains <strong>{r2*100:.1f}%</strong> of variance in docking scores.<br>"
+        f"<strong>RMSE = {rmse:.2f} kcal/mol</strong> — this is the typical prediction error per peptide.<br>"
+        f"True docking scores range from <strong>{min_score:.2f}</strong> to "
+        f"<strong>{max_score:.2f} kcal/mol</strong> in this test set.<br><br>"
+
+        f"Points <strong>above</strong> the diagonal = model over-estimated binding affinity. "
+        f"Points <strong>below</strong> the diagonal = model under-estimated it."
     )
 
 
 def caption_ramachandran(phi_psi, seq=""):
     if not phi_psi:
-        return "No φ/ψ angles could be extracted — the peptide may be too short (< 3 residues) or entirely proline."
-    phi_arr = np.array([p for p, _ in phi_psi])
-    psi_arr = np.array([p for _, p in phi_psi])
-    n_total = len(phi_psi)
-    # Rough allowed region checks
-    n_helix = sum(1 for p, s in phi_psi if -180 <= p <= -45 and -75 <= s <= -15)
-    n_sheet = sum(1 for p, s in phi_psi if -180 <= p <= -45 and 90 <= s <= 180)
+        return (
+            "No φ/ψ angles could be extracted — the peptide may be too short "
+            "(fewer than 3 residues) or composed entirely of proline."
+        )
+    n_total      = len(phi_psi)
+    n_helix      = sum(1 for p, s in phi_psi if -180 <= p <= -45 and -75 <= s <= -15)
+    n_sheet      = sum(1 for p, s in phi_psi if -180 <= p <= -45 and 90  <= s <= 180)
     n_disallowed = n_total - n_helix - n_sheet
-    pct_helix = n_helix / n_total * 100
-    pct_sheet = n_sheet / n_total * 100
-    pct_dis   = n_disallowed / n_total * 100
-    dominant  = "α-helix" if n_helix >= n_sheet else "β-sheet"
-    length_note = f" for this {len(seq)}-residue peptide" if seq else ""
+    pct_helix    = n_helix      / n_total * 100
+    pct_sheet    = n_sheet      / n_total * 100
+    pct_dis      = n_disallowed / n_total * 100
+    dominant     = "α-helix" if n_helix >= n_sheet else "β-sheet"
+    length_note  = f" for this <strong>{len(seq)}-residue peptide</strong>" if seq else ""
     return (
         f"Each dot is one backbone torsion angle pair (φ, ψ){length_note}. "
-        f"Of {n_total} residue(s) plotted: "
-        f"~{pct_helix:.0f}% fall in the α-helix region (green), "
-        f"~{pct_sheet:.0f}% in the β-sheet region (blue), "
-        f"and ~{pct_dis:.0f}% outside core allowed regions — "
-        f"strained conformations common in short or proline-rich peptides. "
-        f"This peptide's backbone geometry primarily favours **{dominant}** character."
+        f"The <strong>coloured shaded regions</strong> mark conformations typical "
+        f"of known secondary structures.<br><br>"
+
+        f"<strong>α-helix region (green):</strong> &nbsp; ~{pct_helix:.0f}% of residues<br>"
+        f"<strong>β-sheet region (blue):</strong> &nbsp; ~{pct_sheet:.0f}% of residues<br>"
+        f"<strong>Outside allowed regions:</strong> &nbsp; ~{pct_dis:.0f}% of residues "
+        f"— strained conformations, common in short or proline-rich peptides.<br><br>"
+
+        f"This peptide's backbone geometry primarily favours "
+        f"<strong>{dominant}</strong> character."
     )
 
 
@@ -390,25 +524,34 @@ def caption_distance_map(dist_matrix, seq=""):
     n = dist_matrix.shape[0]
     if n < 2:
         return "Distance map could not be computed — fewer than 2 Cα atoms detected."
-    # Mask diagonal, find max off-diagonal distance and contact pairs (<8 Å, non-sequential)
-    mask = ~np.eye(n, dtype=bool)
-    off_diag = dist_matrix[mask]
-    max_dist = off_diag.max()
-    min_dist = off_diag.min()
-    # Count long-range contacts (|i-j| > 3 and distance < 8 Å)
-    long_range = 0
-    for i in range(n):
-        for j in range(n):
-            if abs(i - j) > 3 and dist_matrix[i, j] < 8.0:
-                long_range += 1
-    length_note = f"for this {n}-residue peptide " if not seq else f"for **{seq}** ({n} residues) "
+    mask       = ~np.eye(n, dtype=bool)
+    off_diag   = dist_matrix[mask]
+    max_dist   = off_diag.max()
+    min_dist   = off_diag.min()
+    long_range = sum(
+        1 for i in range(n) for j in range(n)
+        if abs(i - j) > 3 and dist_matrix[i, j] < 8.0
+    )
+    fold_note  = (
+        "suggesting the peptide <strong>folds back on itself</strong>"
+        if long_range > 0 else
+        "consistent with an <strong>extended / linear conformation</strong>"
+    )
+    seq_label  = (
+        f"for <strong>{seq}</strong> ({n} residues)"
+        if seq else
+        f"for this <strong>{n}-residue peptide</strong>"
+    )
     return (
-        f"Pairwise Cα–Cα distances {length_note}(darker = closer in 3D space). "
-        f"Nearest non-adjacent residues are {min_dist:.1f} Å apart; "
-        f"the furthest pair is {max_dist:.1f} Å apart. "
-        f"Long-range contacts (|i−j| > 3, distance < 8 Å): **{long_range}** pair(s) — "
-        f"{'suggesting the peptide folds back on itself' if long_range > 0 else 'consistent with an extended/linear conformation'}. "
-        f"The bright band along the main diagonal is expected (adjacent residues ~3.8 Å apart)."
+        f"Pairwise Cα–Cα distances {seq_label} — "
+        f"<strong>darker = closer in 3D space</strong>.<br><br>"
+
+        f"<strong>Nearest non-adjacent residues:</strong> &nbsp; {min_dist:.1f} Å apart<br>"
+        f"<strong>Furthest residue pair:</strong> &nbsp; {max_dist:.1f} Å apart<br>"
+        f"<strong>Long-range contacts</strong> (|i−j| &gt; 3, distance &lt; 8 Å): "
+        f"<strong>{long_range} pair(s)</strong> — {fold_note}.<br><br>"
+
+        f"The bright diagonal band is expected — adjacent residues are always ~3.8 Å apart."
     )
 
 
@@ -468,7 +611,7 @@ def ca_distance_map(pdb_text):
         if not cas:
             return np.zeros((1, 1))
         coords = np.array(cas)
-        diff = coords[:, None, :] - coords[None, :, :]
+        diff   = coords[:, None, :] - coords[None, :, :]
         return np.sqrt((diff ** 2).sum(-1))
     finally:
         os.unlink(tmp_path)
@@ -496,12 +639,14 @@ def ca_rmsd(pdb_text):
 # ==========================================================
 
 def plot_pca(X, y_labels, class_names, title="PCA"):
-    pca = PCA(n_components=2)
+    pca    = PCA(n_components=2)
     coords = pca.fit_transform(X)
-    var1 = pca.explained_variance_ratio_[0] * 100
-    var2 = pca.explained_variance_ratio_[1] * 100
+    var1   = pca.explained_variance_ratio_[0] * 100
+    var2   = pca.explained_variance_ratio_[1] * 100
     palette = plt.cm.get_cmap("tab20", len(class_names))
     fig, ax = plt.subplots(figsize=(9, 6))
+    fig.patch.set_facecolor("#ffffff")
+    ax.set_facecolor("#fafbff")
     for i, cls in enumerate(class_names):
         mask = y_labels == i
         ax.scatter(
@@ -509,34 +654,41 @@ def plot_pca(X, y_labels, class_names, title="PCA"):
             label=cls, alpha=0.75, s=35,
             color=palette(i), edgecolors="white", linewidths=0.3,
         )
-    ax.set_xlabel(f"PC1 ({var1:.1f}% variance)", fontsize=11)
-    ax.set_ylabel(f"PC2 ({var2:.1f}% variance)", fontsize=11)
-    ax.set_title(title, fontsize=12)
+    ax.set_xlabel(f"PC1 ({var1:.1f}% variance)", fontsize=12, color="#1a1a2e", labelpad=10)
+    ax.set_ylabel(f"PC2 ({var2:.1f}% variance)", fontsize=12, color="#1a1a2e", labelpad=10)
+    ax.set_title(title, fontsize=13, color="#1a1a2e", fontweight="bold", pad=12)
+    ax.tick_params(colors="#333344", labelsize=10)
     ax.legend(
-        fontsize=7, bbox_to_anchor=(1.02, 1),
+        fontsize=8, bbox_to_anchor=(1.02, 1),
         loc="upper left", borderaxespad=0,
-        title="Taste class", title_fontsize=8,
+        title="Taste class", title_fontsize=9,
     )
     plt.tight_layout()
-    return fig, pca   # <-- return pca object so caption can read variance
+    return fig, pca
 
 
 def plot_confusion(y_true, y_pred, class_names, title, cmap):
-    cm = confusion_matrix(y_true, y_pred)
+    cm  = confusion_matrix(y_true, y_pred)
     acc = accuracy_score(y_true, y_pred)
-    n = len(class_names)
-    fig, ax = plt.subplots(figsize=(max(6, n * 0.7), max(5, n * 0.55)))
+    n   = len(class_names)
+    fig, ax = plt.subplots(figsize=(max(6, n * 0.75), max(5, n * 0.6)))
+    fig.patch.set_facecolor("#ffffff")
     sns.heatmap(
         cm, annot=True, fmt="d", cmap=cmap,
         xticklabels=class_names,
         yticklabels=class_names,
         ax=ax, linewidths=0.4, linecolor="white",
+        annot_kws={"size": 11, "color": "#111122"},
     )
-    ax.set_title(f"{title}  —  Accuracy: {acc * 100:.1f}%", fontsize=13)
-    ax.set_xlabel("Predicted", fontsize=11)
-    ax.set_ylabel("True", fontsize=11)
-    plt.xticks(rotation=45, ha="right", fontsize=8)
-    plt.yticks(rotation=0, fontsize=8)
+    ax.set_title(
+        f"{title}  —  Accuracy: {acc * 100:.1f}%",
+        fontsize=14, color="#1a1a2e", fontweight="bold", pad=14,
+    )
+    ax.set_xlabel("Predicted", fontsize=12, color="#1a1a2e", labelpad=10)
+    ax.set_ylabel("True",      fontsize=12, color="#1a1a2e", labelpad=10)
+    ax.tick_params(colors="#222233", labelsize=9)
+    plt.xticks(rotation=45, ha="right", fontsize=9)
+    plt.yticks(rotation=0,  fontsize=9)
     plt.tight_layout()
     return fig
 
@@ -549,22 +701,27 @@ def plot_docking(y_true, y_pred):
         max(y_true.max(), y_pred.max()) + 1,
     ]
     fig, ax = plt.subplots(figsize=(6, 6))
+    fig.patch.set_facecolor("#ffffff")
+    ax.set_facecolor("#fafbff")
     ax.scatter(
         y_true, y_pred, alpha=0.65,
-        edgecolors="k", linewidths=0.3, color="#1f3c88", s=40,
+        edgecolors="#1a1a2e", linewidths=0.4, color="#1f3c88", s=45,
     )
-    ax.plot(lims, lims, "r--", lw=1.5, label="Perfect fit")
+    ax.plot(lims, lims, "r--", lw=1.8, label="Perfect fit")
     ax.set_xlim(lims)
     ax.set_ylim(lims)
     ax.annotate(
-        f"R\u00b2 = {r2:.3f}\nRMSE = {rmse:.2f} kcal/mol",
-        xy=(0.05, 0.88), xycoords="axes fraction", fontsize=10,
-        bbox=dict(boxstyle="round,pad=0.4", fc="lightyellow", ec="gray", alpha=0.9),
+        f"R² = {r2:.3f}\nRMSE = {rmse:.2f} kcal/mol",
+        xy=(0.05, 0.87), xycoords="axes fraction", fontsize=11,
+        color="#1a1a2e",
+        bbox=dict(boxstyle="round,pad=0.5", fc="#fff9e6", ec="#aaaaaa", alpha=0.95),
     )
-    ax.set_xlabel("True Docking Score (kcal/mol)", fontsize=11)
-    ax.set_ylabel("Predicted Docking Score (kcal/mol)", fontsize=11)
-    ax.set_title("Docking: True vs Predicted (test set)", fontsize=12)
-    ax.legend(fontsize=9)
+    ax.set_xlabel("True Docking Score (kcal/mol)",      fontsize=12, color="#1a1a2e", labelpad=10)
+    ax.set_ylabel("Predicted Docking Score (kcal/mol)", fontsize=12, color="#1a1a2e", labelpad=10)
+    ax.set_title("Docking: True vs Predicted (test set)", fontsize=13, color="#1a1a2e",
+                 fontweight="bold", pad=12)
+    ax.tick_params(colors="#222233", labelsize=10)
+    ax.legend(fontsize=10)
     plt.tight_layout()
     return fig
 
@@ -575,11 +732,15 @@ def plot_feature_importance(model, feature_names, top_n=20):
         "Importance": model.feature_importances_,
     }).sort_values("Importance", ascending=False).head(top_n)
     colors = plt.cm.Blues(np.linspace(0.4, 0.9, len(imp))[::-1])
-    fig, ax = plt.subplots(figsize=(7, 6))
-    ax.barh(imp["Feature"][::-1], imp["Importance"][::-1], color=colors)
-    ax.set_xlabel("Importance Score", fontsize=11)
-    ax.set_title(f"Top {top_n} Features — Taste Model", fontsize=12)
-    ax.tick_params(axis="y", labelsize=9)
+    fig, ax = plt.subplots(figsize=(8, 7))
+    fig.patch.set_facecolor("#ffffff")
+    ax.set_facecolor("#fafbff")
+    ax.barh(imp["Feature"][::-1], imp["Importance"][::-1], color=colors, edgecolor="white")
+    ax.set_xlabel("Importance Score", fontsize=12, color="#1a1a2e", labelpad=10)
+    ax.set_title(f"Top {top_n} Features — Taste Model", fontsize=13, color="#1a1a2e",
+                 fontweight="bold", pad=12)
+    ax.tick_params(axis="y", labelsize=10, colors="#1a1a2e")
+    ax.tick_params(axis="x", labelsize=10, colors="#1a1a2e")
     plt.tight_layout()
     return fig
 
@@ -588,62 +749,79 @@ def plot_distributions(df):
     seq_lengths  = [len(s) for s in df["peptide"]]
     taste_counts = df["taste"].value_counts()
     gravy_vals   = [gravy_score(s) for s in df["peptide"]]
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+    fig.patch.set_facecolor("#ffffff")
+
+    # — Length histogram
+    axes[0].set_facecolor("#fafbff")
     axes[0].hist(seq_lengths, bins=20, color="#1f3c88", edgecolor="white", alpha=0.85)
     mean_len = np.mean(seq_lengths)
-    axes[0].axvline(mean_len, color="red", linestyle="--", lw=1.5,
+    axes[0].axvline(mean_len, color="#e74c3c", linestyle="--", lw=2,
                     label=f"Mean = {mean_len:.1f} aa")
-    axes[0].set_xlabel("Sequence Length (aa)", fontsize=10)
-    axes[0].set_ylabel("Count", fontsize=10)
-    axes[0].set_title("Peptide Length Distribution", fontsize=11)
-    axes[0].legend(fontsize=8)
+    axes[0].set_xlabel("Sequence Length (aa)", fontsize=11, color="#1a1a2e", labelpad=8)
+    axes[0].set_ylabel("Count",                fontsize=11, color="#1a1a2e", labelpad=8)
+    axes[0].set_title("Peptide Length Distribution", fontsize=12, color="#1a1a2e",
+                      fontweight="bold", pad=10)
+    axes[0].tick_params(colors="#222233", labelsize=10)
+    axes[0].legend(fontsize=9)
 
-    n_cls = len(taste_counts)
+    # — Taste bar chart
+    axes[1].set_facecolor("#fafbff")
+    n_cls      = len(taste_counts)
     bar_colors = plt.cm.get_cmap("tab20", n_cls)(np.linspace(0, 1, n_cls))
     axes[1].barh(taste_counts.index, taste_counts.values,
                  color=bar_colors, edgecolor="white", alpha=0.9)
-    axes[1].set_xlabel("Number of Peptides", fontsize=10)
-    axes[1].set_title("Taste Class Distribution", fontsize=11)
-    axes[1].tick_params(axis="y", labelsize=8)
+    axes[1].set_xlabel("Number of Peptides", fontsize=11, color="#1a1a2e", labelpad=8)
+    axes[1].set_title("Taste Class Distribution", fontsize=12, color="#1a1a2e",
+                      fontweight="bold", pad=10)
+    axes[1].tick_params(axis="y", labelsize=9,  colors="#1a1a2e")
+    axes[1].tick_params(axis="x", labelsize=9,  colors="#1a1a2e")
     for i, v in enumerate(taste_counts.values):
-        axes[1].text(v + 0.3, i, str(v), va="center", fontsize=8)
+        axes[1].text(v + 0.3, i, str(v), va="center", fontsize=9, color="#1a1a2e")
 
+    # — GRAVY histogram
+    axes[2].set_facecolor("#fafbff")
     axes[2].hist(gravy_vals, bins=20, color="#5c6bc0", edgecolor="white", alpha=0.85)
-    axes[2].axvline(0, color="red", linestyle="--", lw=1.5,
+    axes[2].axvline(0, color="#e74c3c", linestyle="--", lw=2,
                     label="Hydrophilic | Hydrophobic")
-    axes[2].axvline(np.mean(gravy_vals), color="orange", linestyle="--", lw=1.5,
+    axes[2].axvline(np.mean(gravy_vals), color="#f39c12", linestyle="--", lw=2,
                     label=f"Mean = {np.mean(gravy_vals):.2f}")
-    axes[2].set_xlabel("GRAVY Score", fontsize=10)
-    axes[2].set_ylabel("Count", fontsize=10)
-    axes[2].set_title("GRAVY Hydrophobicity Distribution", fontsize=11)
-    axes[2].legend(fontsize=7)
+    axes[2].set_xlabel("GRAVY Score", fontsize=11, color="#1a1a2e", labelpad=8)
+    axes[2].set_ylabel("Count",       fontsize=11, color="#1a1a2e", labelpad=8)
+    axes[2].set_title("GRAVY Hydrophobicity Distribution", fontsize=12, color="#1a1a2e",
+                      fontweight="bold", pad=10)
+    axes[2].tick_params(colors="#222233", labelsize=10)
+    axes[2].legend(fontsize=8)
 
-    plt.tight_layout()
+    plt.tight_layout(pad=2.5)
     return fig
 
 
 def plot_ramachandran(phi_psi):
     fig, ax = plt.subplots(figsize=(6, 6))
-    ax.set_facecolor("#f8f8f8")
+    fig.patch.set_facecolor("#ffffff")
+    ax.set_facecolor("#f8f9ff")
     ax.fill([-180, -180, -45, -45, -180], [-75, -45, -45, -75, -75],
-            color="#4CAF50", alpha=0.2, label="\u03b1-helix (allowed)")
+            color="#4CAF50", alpha=0.2, label="α-helix (allowed)")
     ax.fill([-180, -180, -90, -90, -180], [90, 180, 180, 90, 90],
-            color="#2196F3", alpha=0.2, label="\u03b2-sheet (allowed)")
+            color="#2196F3", alpha=0.2, label="β-sheet (allowed)")
     ax.fill([45, 45, 90, 90, 45], [0, 90, 90, 0, 0],
             color="#FF9800", alpha=0.15, label="L-helix (allowed)")
     if phi_psi:
         phi, psi = zip(*phi_psi)
-        ax.scatter(phi, psi, s=35, color="#c0392b", zorder=5,
-                   edgecolors="white", linewidths=0.3)
-    ax.axhline(0, color="gray", lw=0.5, linestyle="--")
-    ax.axvline(0, color="gray", lw=0.5, linestyle="--")
+        ax.scatter(phi, psi, s=40, color="#c0392b", zorder=5,
+                   edgecolors="white", linewidths=0.4)
+    ax.axhline(0, color="#888899", lw=0.6, linestyle="--")
+    ax.axvline(0, color="#888899", lw=0.6, linestyle="--")
     ax.set_xlim(-180, 180)
     ax.set_ylim(-180, 180)
-    ax.set_xlabel("Phi \u03c6 (\u00b0)", fontsize=11)
-    ax.set_ylabel("Psi \u03c8 (\u00b0)", fontsize=11)
-    ax.set_title("Ramachandran Plot", fontsize=12)
-    ax.legend(fontsize=8, loc="upper right")
+    ax.set_xlabel("Phi φ (°)", fontsize=12, color="#1a1a2e", labelpad=10)
+    ax.set_ylabel("Psi ψ (°)", fontsize=12, color="#1a1a2e", labelpad=10)
+    ax.set_title("Ramachandran Plot", fontsize=13, color="#1a1a2e",
+                 fontweight="bold", pad=12)
+    ax.tick_params(colors="#222233", labelsize=10)
+    ax.legend(fontsize=9, loc="upper right")
     ax.set_xticks(range(-180, 181, 60))
     ax.set_yticks(range(-180, 181, 60))
     plt.tight_layout()
@@ -656,20 +834,23 @@ def plot_distance_map(dist_matrix, seq=""):
         labels = [f"{aa}{i+1}" for i, aa in enumerate(seq)]
     else:
         labels = [str(i + 1) for i in range(n)]
-    tick_step = max(1, n // 15)
+    tick_step   = max(1, n // 15)
     show_labels = [labels[i] if i % tick_step == 0 else "" for i in range(n)]
-    size = max(5, n * 0.3 + 2)
-    fig, ax = plt.subplots(figsize=(size, size))
+    size        = max(5, n * 0.3 + 2)
+    fig, ax     = plt.subplots(figsize=(size, size))
+    fig.patch.set_facecolor("#ffffff")
     sns.heatmap(
         dist_matrix, cmap="viridis", ax=ax,
         xticklabels=show_labels, yticklabels=show_labels,
-        linewidths=0, cbar_kws={"label": "Distance (\u00c5)"},
+        linewidths=0, cbar_kws={"label": "Distance (Å)"},
     )
-    ax.set_title("C\u03b1 Distance Map", fontsize=12)
-    ax.set_xlabel("Residue", fontsize=10)
-    ax.set_ylabel("Residue", fontsize=10)
-    plt.xticks(rotation=45, ha="right", fontsize=7)
-    plt.yticks(rotation=0, fontsize=7)
+    ax.set_title("Cα Distance Map", fontsize=13, color="#1a1a2e",
+                 fontweight="bold", pad=12)
+    ax.set_xlabel("Residue", fontsize=12, color="#1a1a2e", labelpad=10)
+    ax.set_ylabel("Residue", fontsize=12, color="#1a1a2e", labelpad=10)
+    ax.tick_params(colors="#222233")
+    plt.xticks(rotation=45, ha="right", fontsize=8)
+    plt.yticks(rotation=0,  fontsize=8)
     plt.tight_layout()
     return fig
 
@@ -679,6 +860,7 @@ def plot_distance_map(dist_matrix, seq=""):
 # ==========================================================
 
 def render_structural_analysis(pdb_text, prefix="", seq=""):
+    st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
     st.markdown("### 📐 Ramachandran Plot")
     phi_psi = ramachandran(pdb_text)
     if not phi_psi:
@@ -687,17 +869,16 @@ def render_structural_analysis(pdb_text, prefix="", seq=""):
     save_fig(fig_rama, f"{prefix}ramachandran.png")
     st.pyplot(fig_rama)
     plt.close(fig_rama)
-    # --- Dynamic caption ---
-    st.caption(caption_ramachandran(phi_psi, seq=seq))
+    show_caption(caption_ramachandran(phi_psi, seq=seq))
 
+    st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
     st.markdown("### 🗺️ Cα Distance Map")
     dist_map = ca_distance_map(pdb_text)
     fig_dist = plot_distance_map(dist_map, seq=seq)
     save_fig(fig_dist, f"{prefix}ca_distance_map.png")
     st.pyplot(fig_dist)
     plt.close(fig_dist)
-    # --- Dynamic caption ---
-    st.caption(caption_distance_map(dist_map, seq=seq))
+    show_caption(caption_distance_map(dist_map, seq=seq))
 
 
 # ==========================================================
@@ -721,29 +902,25 @@ def train_models():
     ].reset_index(drop=True)
 
     df["solubility"] = df["solubility"].str.strip().str.rstrip(".")
-    df["taste"] = simplify_taste(df["taste"])
+    df["taste"]      = simplify_taste(df["taste"])
 
-    X = build_feature_table(df["peptide"])
+    X        = build_feature_table(df["peptide"])
     le_taste = LabelEncoder()
     le_sol   = LabelEncoder()
     y_taste  = le_taste.fit_transform(df["taste"])
     y_sol    = le_sol.fit_transform(df["solubility"])
     y_dock   = df["docking score (kcal/mol)"].values
 
-    idx = np.arange(len(X))
-    tr_idx, te_idx = train_test_split(
-        idx, test_size=0.2, random_state=42, stratify=y_taste
-    )
-    Xtr, Xte = X.iloc[tr_idx], X.iloc[te_idx]
-    yt_tr, yt_te = y_taste[tr_idx], y_taste[te_idx]
-    ys_tr, ys_te = y_sol[tr_idx],   y_sol[te_idx]
-    yd_tr, yd_te = y_dock[tr_idx],  y_dock[te_idx]
+    idx            = np.arange(len(X))
+    tr_idx, te_idx = train_test_split(idx, test_size=0.2, random_state=42, stratify=y_taste)
+    Xtr, Xte       = X.iloc[tr_idx], X.iloc[te_idx]
+    yt_tr, yt_te   = y_taste[tr_idx], y_taste[te_idx]
+    ys_tr, ys_te   = y_sol[tr_idx],   y_sol[te_idx]
+    yd_tr, yd_te   = y_dock[tr_idx],  y_dock[te_idx]
 
-    taste_model = ExtraTreesClassifier(
-        n_estimators=500, class_weight="balanced", random_state=42)
-    sol_model = ExtraTreesClassifier(
-        n_estimators=300, class_weight="balanced", random_state=42)
-    dock_model = RandomForestRegressor(n_estimators=400, random_state=42)
+    taste_model = ExtraTreesClassifier(n_estimators=500, class_weight="balanced", random_state=42)
+    sol_model   = ExtraTreesClassifier(n_estimators=300, class_weight="balanced", random_state=42)
+    dock_model  = RandomForestRegressor(n_estimators=400, random_state=42)
 
     taste_model.fit(Xtr, yt_tr)
     sol_model.fit(Xtr, ys_tr)
@@ -782,15 +959,16 @@ def train_models():
 
 def generate_pdf(metrics, prediction, image_paths):
     file_name = "PepTastePredictor_Full_Report.pdf"
-    styles = getSampleStyleSheet()
-    doc = SimpleDocTemplate(file_name, pagesize=A4)
-    story = []
+    styles    = getSampleStyleSheet()
+    doc       = SimpleDocTemplate(file_name, pagesize=A4)
+    story     = []
 
     story.append(Paragraph("<b>PepTastePredictor</b>", styles["Title"]))
     story.append(Spacer(1, 12))
     story.append(Paragraph(
         "AI-driven peptide taste, solubility, docking, and structural analysis platform.",
-        styles["Normal"]))
+        styles["Normal"],
+    ))
     story.append(Spacer(1, 12))
 
     story.append(Paragraph("<b>Model Performance</b>", styles["Heading2"]))
@@ -847,10 +1025,10 @@ mode = st.radio(
 )
 
 if "current_mode" not in st.session_state or st.session_state.current_mode != mode:
-    st.session_state.pdf_figures = []
-    st.session_state.show_analytics = False
+    st.session_state.pdf_figures     = []
+    st.session_state.show_analytics  = False
     st.session_state.last_prediction = {}
-    st.session_state.current_mode = mode
+    st.session_state.current_mode    = mode
 
 
 # ==========================================================
@@ -872,7 +1050,7 @@ if mode == "Single Peptide Prediction":
         if len(seq) < 2:
             st.error("Peptide sequence must be at least 2 amino acids long.")
         else:
-            Xp = pd.DataFrame([model_features(seq)])
+            Xp    = pd.DataFrame([model_features(seq)])
             taste = le_taste.inverse_transform(taste_model.predict(Xp))[0]
             sol   = le_sol.inverse_transform(sol_model.predict(Xp))[0]
             dock  = dock_model.predict(Xp)[0]
@@ -887,20 +1065,26 @@ if mode == "Single Peptide Prediction":
 
             st.markdown(f"""
             <div class="card">
-                <div class="metric">Taste</div><p>{taste}</p>
-                <div class="metric">Solubility</div><p>{sol}</p>
-                <div class="metric">Docking Score</div><p>{dock:.3f} kcal/mol</p>
+                <div class="metric-label">Taste</div>
+                <div class="metric-value">{taste}</div>
+                <div class="metric-label">Solubility</div>
+                <div class="metric-value">{sol}</div>
+                <div class="metric-label">Docking Score</div>
+                <div class="metric-value">{dock:.3f} kcal/mol</div>
             </div>
             """, unsafe_allow_html=True)
 
+            st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
             st.markdown("### 📌 Physicochemical Properties")
             for k, v in physicochemical_features(seq).items():
                 st.write(f"**{k}**: {v}")
 
+            st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
             st.markdown("### 🧪 Amino Acid Composition")
             for k, v in composition_features(seq).items():
                 st.write(f"**{k}**: {v}")
 
+            st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
             st.markdown("## 🧬 Predicted 3D Peptide Structure")
             pdb_text = build_peptide_pdb(seq)
             st.session_state.pdb_text = pdb_text
@@ -933,18 +1117,18 @@ elif mode == "Batch Peptide Prediction":
         else:
             batch_df["peptide"] = batch_df["peptide"].apply(clean_sequence)
             batch_df = batch_df[batch_df["peptide"].str.len() >= 2].reset_index(drop=True)
-            X_batch = build_feature_table(batch_df["peptide"])
-            batch_df["Predicted Taste"] = le_taste.inverse_transform(
-                taste_model.predict(X_batch))
-            batch_df["Predicted Solubility"] = le_sol.inverse_transform(
-                sol_model.predict(X_batch))
+            X_batch  = build_feature_table(batch_df["peptide"])
+            batch_df["Predicted Taste"]         = le_taste.inverse_transform(taste_model.predict(X_batch))
+            batch_df["Predicted Solubility"]    = le_sol.inverse_transform(sol_model.predict(X_batch))
             batch_df["Predicted Docking Score"] = dock_model.predict(X_batch)
 
             st.markdown("### ✅ Batch Results")
             st.dataframe(batch_df)
-            st.download_button("⬇️ Download Batch Predictions",
-                               batch_df.to_csv(index=False),
-                               file_name="batch_predictions.csv")
+            st.download_button(
+                "⬇️ Download Batch Predictions",
+                batch_df.to_csv(index=False),
+                file_name="batch_predictions.csv",
+            )
             st.session_state.show_analytics = True
 
 
@@ -959,7 +1143,7 @@ elif mode == "PDB Upload & Structural Analysis":
 
     if uploaded_pdb is not None:
         pdb_text = uploaded_pdb.read().decode()
-        st.session_state.pdb_text = pdb_text
+        st.session_state.pdb_text       = pdb_text
         st.session_state.show_analytics = True
 
         st.markdown("### 🧬 3D Structure Viewer")
@@ -987,14 +1171,16 @@ if st.session_state.show_analytics:
             st.write(f"**{k}**: {round(v, 4)}")
 
         # ── Dataset Distributions ──────────────────────────────────────────
+        st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 📊 Dataset Distributions")
         fig_dist = plot_distributions(df_all)
         save_fig(fig_dist, "distributions.png")
         st.pyplot(fig_dist)
         plt.close(fig_dist)
-        st.caption(caption_distributions(df_all))
+        show_caption(caption_distributions(df_all))
 
         # ── PCA ────────────────────────────────────────────────────────────
+        st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 🔹 PCA: Peptide Feature Space (coloured by taste)")
         fig_pca, pca_model = plot_pca(
             X_all, le_taste.transform(df_all["taste"]), le_taste.classes_,
@@ -1003,45 +1189,52 @@ if st.session_state.show_analytics:
         save_fig(fig_pca, "pca_overall.png")
         st.pyplot(fig_pca)
         plt.close(fig_pca)
-        st.caption(caption_pca(pca_model, le_taste.classes_))
+        show_caption(caption_pca(pca_model, le_taste.classes_))
 
         # ── Confusion Matrix — Taste ───────────────────────────────────────
+        st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 🔹 Confusion Matrix — Taste (test set)")
+        taste_preds  = taste_model.predict(X_test)
         fig_cm_taste = plot_confusion(
-            yt_test, taste_model.predict(X_test),
+            yt_test, taste_preds,
             le_taste.classes_, title="Taste Confusion Matrix", cmap="Blues",
         )
         save_fig(fig_cm_taste, "confusion_taste.png")
         st.pyplot(fig_cm_taste)
         plt.close(fig_cm_taste)
-        st.caption(caption_confusion_taste(yt_test, taste_model.predict(X_test), le_taste.classes_))
+        show_caption(caption_confusion_taste(yt_test, taste_preds, le_taste.classes_))
 
         # ── Confusion Matrix — Solubility ──────────────────────────────────
+        st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 🔹 Confusion Matrix — Solubility (test set)")
+        sol_preds  = sol_model.predict(X_test)
         fig_cm_sol = plot_confusion(
-            ys_test, sol_model.predict(X_test),
+            ys_test, sol_preds,
             le_sol.classes_, title="Solubility Confusion Matrix", cmap="Greens",
         )
         save_fig(fig_cm_sol, "confusion_solubility.png")
         st.pyplot(fig_cm_sol)
         plt.close(fig_cm_sol)
-        st.caption(caption_confusion_sol(ys_test, sol_model.predict(X_test), le_sol.classes_))
+        show_caption(caption_confusion_sol(ys_test, sol_preds, le_sol.classes_))
 
         # ── Feature Importance ─────────────────────────────────────────────
+        st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 🔹 Feature Importance — Taste Model")
         fig_imp = plot_feature_importance(taste_model, X_all.columns, top_n=20)
         save_fig(fig_imp, "feature_importance_taste.png")
         st.pyplot(fig_imp)
         plt.close(fig_imp)
-        st.caption(caption_feature_importance(taste_model, X_all.columns, top_n=20))
+        show_caption(caption_feature_importance(taste_model, X_all.columns, top_n=20))
 
         # ── Docking Scatter ────────────────────────────────────────────────
+        st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 🔹 Docking Score: True vs Predicted (test set)")
-        fig_dock = plot_docking(yd_test, dock_model.predict(X_test))
+        dock_preds = dock_model.predict(X_test)
+        fig_dock   = plot_docking(yd_test, dock_preds)
         save_fig(fig_dock, "docking_scatter.png")
         st.pyplot(fig_dock)
         plt.close(fig_dock)
-        st.caption(caption_docking(yd_test, dock_model.predict(X_test)))
+        show_caption(caption_docking(yd_test, dock_preds))
 
 
 # ==========================================================
@@ -1067,7 +1260,7 @@ if st.session_state.show_analytics and len(st.session_state.pdf_figures) > 0:
 
 st.markdown(f"""
 <div class="footer">
-&copy; {date.today().year} <b>PepTastePredictor</b><br>
+&copy; {date.today().year} &nbsp; <b>PepTastePredictor</b><br>
 An AI + Structural Bioinformatics platform for peptide analysis<br>
 For academic, educational, and research use
 </div>
