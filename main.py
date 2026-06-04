@@ -1024,8 +1024,9 @@ def caption_sasa(sasa_total, pr_sasa: dict, n_residues: int):
     if sasa_total is None:
         return "SASA could not be computed for this structure."
     avg  = sasa_total / max(n_residues, 1)
-    exp  = sum(1 for v in pr_sasa.values() if v >= np.median(list(pr_sasa.values())) if pr_sasa else 0)
-    bur  = len(pr_sasa) - exp
+    median_sasa = np.median(list(pr_sasa.values())) if pr_sasa else 0
+    exp = sum(1 for v in pr_sasa.values() if v >= median_sasa)
+    bur = len(pr_sasa) - exp
     return (
         f"Solvent-accessible surface area analysis.<br><br>"
         f"<strong>Total SASA:</strong> {sasa_total:.1f} Å² | "
