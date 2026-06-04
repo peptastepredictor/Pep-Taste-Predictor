@@ -1,8 +1,7 @@
 # ==========================================================
 # PepTastePredictor — app.py
 # A complete end-to-end peptide analysis platform
-# Light + Dark Mode Compatible Version
-# ESMFold-powered structure prediction
+# Light + Dark Mode Compatible | ESMFold API | Dynamic UI
 # ==========================================================
 
 # ==========================================================
@@ -10,7 +9,9 @@
 # ==========================================================
 
 import os
+import time
 import tempfile
+import requests
 from datetime import date
 from collections import Counter
 
@@ -58,7 +59,6 @@ st.set_page_config(
 
 DATASET_PATH = "AIML.xlsx"
 AA = "ACDEFGHIKLMNPQRSTVWY"
-
 ALL_DIPEPTIDES = [a1 + a2 for a1 in AA for a2 in AA]
 
 KD_SCALE = {
@@ -68,45 +68,33 @@ KD_SCALE = {
     "S": -0.8, "T": -0.7, "V": 4.2,  "W": -0.9, "Y": -1.3,
 }
 
+ESMFOLD_API_URL = "https://api.esmatlas.com/foldSequence/v1/pdb/"
+
+# Taste emoji map
+TASTE_EMOJI = {
+    "Bitter": "😖", "Sweet": "😋", "Salty": "🧂",
+    "Sour": "😮‍💨", "Umami": "🤤",
+}
+
 
 # ==========================================================
-# SECTION 3 - FRONTEND STYLING (Light + Dark Mode)
+# SECTION 3 - FRONTEND STYLING
 # ==========================================================
 
-st.markdown(
-    """
+st.markdown("""
 <style>
-
-/* ══════════════════════════════════════════════════════════
-   UNIVERSAL FIX — var(--text-color) is injected by
-   Streamlit itself and is always correct for the current
-   theme (dark or light). Using it everywhere means we never
-   fight against Streamlit's own theme system.
-══════════════════════════════════════════════════════════ */
-
-/* Every text element in the app */
 .stApp p, .stApp span, .stApp label,
 .stApp li, .stApp h1, .stApp h2, .stApp h3,
-.stApp h4, .stApp h5, .stApp div {
-    color: var(--text-color) !important;
-}
+.stApp h4, .stApp h5, .stApp div { color: var(--text-color) !important; }
 .stMarkdown, .stMarkdown * { color: var(--text-color) !important; }
 h1, h2, h3, h4 { color: var(--text-color) !important; }
-
-/* Radio */
 div[data-testid="stRadio"] label,
 div[data-testid="stRadio"] label span,
 div[data-testid="stRadio"] label p { color: var(--text-color) !important; }
-
-/* Text input label */
 div[data-testid="stTextInput"] label,
 div[data-testid="stTextInput"] label p { color: var(--text-color) !important; }
-
-/* Text input VALUE — the typed text inside the box */
 div[data-testid="stTextInput"] input,
 div[data-testid="stTextInput"] input::placeholder { color: var(--text-color) !important; }
-
-/* File uploader */
 div[data-testid="stFileUploader"] label,
 div[data-testid="stFileUploader"] label p,
 div[data-testid="stFileUploader"] span,
@@ -114,18 +102,12 @@ div[data-testid="stFileUploader"] p,
 div[data-testid="stFileUploader"] small,
 div[data-testid="stFileUploaderDropzone"] span,
 div[data-testid="stFileUploaderDropzone"] p { color: var(--text-color) !important; }
-
-/* Selectbox */
 div[data-testid="stSelectbox"] label,
 div[data-testid="stSelectbox"] label p { color: var(--text-color) !important; }
-
-/* Expander */
 details summary p, details summary span,
 button[data-testid="stExpanderToggleButton"] p,
 button[data-testid="stExpanderToggleButton"] span,
 button[data-testid="stExpanderToggleButton"] div { color: var(--text-color) !important; }
-
-/* Sidebar */
 section[data-testid="stSidebar"],
 section[data-testid="stSidebar"] p,
 section[data-testid="stSidebar"] span,
@@ -135,44 +117,33 @@ section[data-testid="stSidebar"] div,
 section[data-testid="stSidebar"] h1,
 section[data-testid="stSidebar"] h2,
 section[data-testid="stSidebar"] h3 { color: var(--text-color) !important; }
-
-/* DataFrames */
 .stDataFrame, .stDataFrame td, .stDataFrame th,
 [data-testid="stDataFrame"] * { color: var(--text-color) !important; }
-
-/* Metric widgets */
 [data-testid="stMetric"] label,
 [data-testid="stMetric"] div { color: var(--text-color) !important; }
-
-/* Buttons — inherit so Streamlit's own colour applies correctly */
 .stButton button p,
 div[data-testid="stDownloadButton"] button p { color: inherit !important; }
-
-/* Alert boxes — never override */
 div[data-testid="stAlert"] *,
 div[data-testid="stAlert"] p,
 div[data-testid="stAlert"] span { color: inherit !important; }
 
-/* ══════════════════════════════════════════════════════════
-   CUSTOM HTML COMPONENTS
-══════════════════════════════════════════════════════════ */
-
 .hero {
-    background: linear-gradient(90deg, #1f3c88, #0b7285);
-    padding: 36px 40px;
-    border-radius: 16px;
+    background: linear-gradient(135deg, #1f3c88 0%, #0b7285 60%, #12b886 100%);
+    padding: 40px 44px;
+    border-radius: 20px;
     margin-bottom: 36px;
+    box-shadow: 0 8px 32px rgba(31,60,136,0.18);
 }
 .hero h1 {
-    font-size: 2.2rem !important;
-    font-weight: 700 !important;
+    font-size: 2.4rem !important;
+    font-weight: 800 !important;
     margin-bottom: 10px;
     color: #ffffff !important;
     letter-spacing: -0.5px;
 }
 .hero p {
-    font-size: 1.05rem !important;
-    line-height: 1.7;
+    font-size: 1.08rem !important;
+    line-height: 1.8;
     color: #dce8ff !important;
     margin: 0;
 }
@@ -180,17 +151,27 @@ div[data-testid="stAlert"] span { color: inherit !important; }
 .card {
     border: 1px solid rgba(128,128,180,0.3);
     padding: 28px 32px;
-    border-radius: 14px;
+    border-radius: 16px;
     margin-bottom: 28px;
     background: rgba(128,128,180,0.05);
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+}
+
+.live-card {
+    border: 2px solid rgba(26,143,209,0.35);
+    padding: 22px 28px;
+    border-radius: 14px;
+    margin-bottom: 18px;
+    background: rgba(26,143,209,0.05);
+    transition: all 0.3s ease;
 }
 
 .metric-label {
-    font-size: 13px !important;
-    font-weight: 600 !important;
+    font-size: 12px !important;
+    font-weight: 700 !important;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
-    opacity: 0.7;
+    letter-spacing: 0.1em;
+    opacity: 0.6;
     margin-bottom: 4px;
     margin-top: 18px;
     color: var(--text-color) !important;
@@ -198,10 +179,43 @@ div[data-testid="stAlert"] span { color: inherit !important; }
 .metric-label:first-child { margin-top: 0; }
 
 .metric-value {
-    font-size: 22px !important;
-    font-weight: 700 !important;
+    font-size: 24px !important;
+    font-weight: 800 !important;
     color: #1a8fd1 !important;
     margin-bottom: 2px;
+}
+
+.progress-bar-wrap {
+    background: rgba(128,128,180,0.15);
+    border-radius: 8px;
+    height: 10px;
+    margin: 6px 0 16px 0;
+    overflow: hidden;
+}
+.progress-bar-fill {
+    height: 10px;
+    border-radius: 8px;
+    transition: width 0.6s ease;
+}
+
+.seq-counter {
+    font-size: 13px;
+    font-weight: 600;
+    opacity: 0.65;
+    margin-bottom: 6px;
+    color: var(--text-color) !important;
+}
+
+.aa-badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 700;
+    margin: 3px 2px;
+    background: rgba(26,143,209,0.15);
+    color: #1a8fd1 !important;
+    border: 1px solid rgba(26,143,209,0.3);
 }
 
 .graph-caption {
@@ -215,17 +229,31 @@ div[data-testid="stAlert"] span { color: inherit !important; }
     background: rgba(74,111,165,0.08);
     color: var(--text-color) !important;
 }
-.graph-caption strong {
-    font-weight: 700;
-    color: var(--text-color) !important;
-}
-.graph-caption em {
-    font-style: italic;
-    color: var(--text-color) !important;
-    opacity: 0.85;
-}
+.graph-caption strong { font-weight: 700; color: var(--text-color) !important; }
+.graph-caption em { font-style: italic; color: var(--text-color) !important; opacity: 0.85; }
 
 .section-gap { margin-top: 40px; margin-bottom: 6px; }
+
+.plddt-bar {
+    height: 14px;
+    border-radius: 7px;
+    margin: 8px 0 4px 0;
+    transition: width 1s ease;
+}
+
+.esm-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 600;
+    background: rgba(18,184,134,0.12);
+    border: 1px solid rgba(18,184,134,0.35);
+    color: #12b886 !important;
+    margin-bottom: 16px;
+}
 
 .footer {
     text-align: center;
@@ -238,10 +266,21 @@ div[data-testid="stAlert"] span { color: inherit !important; }
     opacity: 0.7;
 }
 
+@keyframes pulse {
+    0%   { opacity: 1; }
+    50%  { opacity: 0.5; }
+    100% { opacity: 1; }
+}
+.live-indicator {
+    display: inline-block;
+    width: 8px; height: 8px;
+    background: #12b886;
+    border-radius: 50%;
+    animation: pulse 1.5s infinite;
+    margin-right: 6px;
+}
 </style>
-""",
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
 
 
 # ==========================================================
@@ -258,33 +297,31 @@ st.sidebar.write("• Solubility prediction")
 st.sidebar.write("• Docking estimation")
 st.sidebar.write("• Structural bioinformatics")
 st.sidebar.write("• Batch screening")
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("**🔬 Structure Engine**")
+st.sidebar.markdown('<div class="esm-badge">⚡ ESMFold API</div>', unsafe_allow_html=True)
+st.sidebar.caption("No GPU required — uses Meta's ESMFold cloud API for real protein folding.")
 st.sidebar.info("For academic & educational use only")
 
-# ESMFold installation note in sidebar
-with st.sidebar.expander("⚙️ ESMFold Installation", expanded=False):
-    st.markdown("""
-**Required packages:**
-```bash
-pip install torch torchvision
-pip install transformers>=4.24.0
-pip install accelerate
-pip install fair-esm
-```
-ESMFold loads once and is cached for the session.
-GPU is used automatically if CUDA is available.
-""")
-
 
 # ==========================================================
-# SECTION 5 - SESSION STATE INITIALISATION
+# SECTION 5 - SESSION STATE
 # ==========================================================
 
-if "initialized" not in st.session_state:
-    st.session_state.initialized = True
-    st.session_state.pdb_text = None
-    st.session_state.last_prediction = {}
-    st.session_state.show_analytics = False
-    st.session_state.pdf_figures = []
+defaults = {
+    "initialized": True,
+    "pdb_text": None,
+    "last_prediction": {},
+    "show_analytics": False,
+    "pdf_figures": [],
+    "live_seq": "",
+    "live_results": None,
+    "current_mode": None,
+}
+for k, v in defaults.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
 
 # ==========================================================
@@ -305,22 +342,40 @@ def clean_sequence(seq):
 
 
 def model_features(seq):
-    ana = ProteinAnalysis(seq)
-    features = {
-        "length":      len(seq),
-        "mw":          ana.molecular_weight(),
-        "pI":          ana.isoelectric_point(),
-        "aromaticity": ana.aromaticity(),
-        "instability": ana.instability_index(),
-        "gravy":       ana.gravy(),
-        "charge":      ana.charge_at_pH(7.0),
-    }
+    # For single amino acid, use composition-only features (skip BioPython which needs ≥2)
+    L = len(seq)
+    features = {"length": L}
+
+    if L >= 2:
+        try:
+            ana = ProteinAnalysis(seq)
+            features.update({
+                "mw":          ana.molecular_weight(),
+                "pI":          ana.isoelectric_point(),
+                "aromaticity": ana.aromaticity(),
+                "instability": ana.instability_index(),
+                "gravy":       ana.gravy(),
+                "charge":      ana.charge_at_pH(7.0),
+            })
+        except Exception:
+            features.update({"mw": 0, "pI": 7.0, "aromaticity": 0,
+                              "instability": 0, "gravy": 0, "charge": 0})
+    else:
+        # Single AA — compute manually
+        features.update({
+            "mw":          111.0,
+            "pI":          7.0,
+            "aromaticity": 1.0 if seq in "FWY" else 0.0,
+            "instability": 0.0,
+            "gravy":       KD_SCALE.get(seq, 0.0),
+            "charge":      1.0 if seq in "KRH" else (-1.0 if seq in "DE" else 0.0),
+        })
+
     for aa in AA:
-        features[f"AA_{aa}"] = seq.count(aa) / len(seq)
-    denom = max(len(seq) - 1, 1)
+        features[f"AA_{aa}"] = seq.count(aa) / L
+    denom = max(L - 1, 1)
     for dp in ALL_DIPEPTIDES:
         features[f"DPC_{dp}"] = seq.count(dp) / denom
-    L = len(seq)
     groups = {
         "hydrophobic": "AILMFWV",
         "polar":       "STNQ",
@@ -338,19 +393,30 @@ def build_feature_table(seqs):
 
 
 def physicochemical_features(seq):
-    ana = ProteinAnalysis(seq)
-    h, t, s = ana.secondary_structure_fraction()
+    L = len(seq)
+    if L >= 2:
+        try:
+            ana = ProteinAnalysis(seq)
+            h, t, s = ana.secondary_structure_fraction()
+            return {
+                "Length":                L,
+                "Molecular weight (Da)": round(ana.molecular_weight(), 2),
+                "Isoelectric point":     round(ana.isoelectric_point(), 2),
+                "Net charge (pH 7)":     round(ana.charge_at_pH(7.0), 2),
+                "Aromaticity":           round(ana.aromaticity(), 3),
+                "GRAVY":                 round(ana.gravy(), 3),
+                "Instability index":     round(ana.instability_index(), 2),
+                "Helix fraction":        round(h, 3),
+                "Turn fraction":         round(t, 3),
+                "Sheet fraction":        round(s, 3),
+            }
+        except Exception:
+            pass
     return {
-        "Length":                len(seq),
-        "Molecular weight (Da)": round(ana.molecular_weight(), 2),
-        "Isoelectric point":     round(ana.isoelectric_point(), 2),
-        "Net charge (pH 7)":     round(ana.charge_at_pH(7.0), 2),
-        "Aromaticity":           round(ana.aromaticity(), 3),
-        "GRAVY":                 round(ana.gravy(), 3),
-        "Instability index":     round(ana.instability_index(), 2),
-        "Helix fraction":        round(h, 3),
-        "Turn fraction":         round(t, 3),
-        "Sheet fraction":        round(s, 3),
+        "Length":                L,
+        "GRAVY":                 round(KD_SCALE.get(seq, 0.0), 3),
+        "Aromaticity":           1.0 if seq in "FWY" else 0.0,
+        "Note":                  "Extended analysis requires ≥2 amino acids",
     }
 
 
@@ -387,19 +453,85 @@ def prettify_feature(name):
 
 
 def gravy_score(seq):
+    if not seq:
+        return 0.0
     return sum(KD_SCALE.get(a, 0) for a in seq) / len(seq)
 
 
 def show_caption(html_text: str):
-    """Render a styled, theme-aware caption box below each graph."""
-    st.markdown(
-        f'<div class="graph-caption">{html_text}</div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown(f'<div class="graph-caption">{html_text}</div>', unsafe_allow_html=True)
+
+
+def taste_emoji(taste: str) -> str:
+    for k, v in TASTE_EMOJI.items():
+        if k.lower() in taste.lower():
+            return v
+    return "🧬"
 
 
 # ==========================================================
-# SECTION 6B - DYNAMIC CAPTION HELPERS
+# SECTION 6B - DYNAMIC LIVE PREVIEW
+# ==========================================================
+
+def render_live_preview(seq: str):
+    """Renders real-time physicochemical stats as the user types."""
+    if not seq:
+        return
+    L = len(seq)
+    gv = gravy_score(seq)
+    c = Counter(seq)
+
+    hydro_pct  = 100 * sum(c[a] for a in "AILMFWV") / L
+    charge_pct = 100 * sum(c[a] for a in "DEKRH") / L
+    arom_pct   = 100 * sum(c[a] for a in "FWY") / L
+
+    hydro_color  = "#1a8fd1" if gv > 0 else "#e67e22"
+    charge_label = "Positive" if sum(c[a] for a in "KRH") > sum(c[a] for a in "DE") else "Negative"
+
+    st.markdown(f"""
+    <div class="live-card">
+      <span style="font-size:12px;font-weight:700;opacity:0.5;text-transform:uppercase;letter-spacing:0.08em;">
+        <span class="live-indicator"></span>Live Sequence Analysis
+      </span>
+      <div style="display:flex;gap:32px;flex-wrap:wrap;margin-top:14px;">
+        <div>
+          <div class="metric-label" style="margin-top:0;">Length</div>
+          <div class="metric-value">{L} aa</div>
+        </div>
+        <div>
+          <div class="metric-label" style="margin-top:0;">GRAVY</div>
+          <div class="metric-value" style="color:{hydro_color} !important;">{gv:+.2f}</div>
+          <div style="font-size:11px;opacity:0.6;">{'Hydrophobic' if gv>0 else 'Hydrophilic'}</div>
+        </div>
+        <div>
+          <div class="metric-label" style="margin-top:0;">Charge</div>
+          <div class="metric-value">{charge_label}</div>
+        </div>
+        <div>
+          <div class="metric-label" style="margin-top:0;">Aromatic</div>
+          <div class="metric-value">{arom_pct:.0f}%</div>
+        </div>
+      </div>
+      <div style="margin-top:14px;">
+        <div class="metric-label" style="margin-top:0;">Hydrophobic residues</div>
+        <div class="progress-bar-wrap">
+          <div class="progress-bar-fill" style="width:{min(hydro_pct,100):.0f}%;background:#1a8fd1;"></div>
+        </div>
+        <div class="metric-label">Charged residues</div>
+        <div class="progress-bar-wrap">
+          <div class="progress-bar-fill" style="width:{min(charge_pct,100):.0f}%;background:#e67e22;"></div>
+        </div>
+      </div>
+      <div style="margin-top:10px;">
+        {''.join(f'<span class="aa-badge">{aa}</span>' for aa in seq[:30])}
+        {'<span style="opacity:0.5;font-size:12px;"> +more</span>' if L > 30 else ''}
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# ==========================================================
+# SECTION 6C - CAPTION HELPERS
 # ==========================================================
 
 def caption_distributions(df):
@@ -420,19 +552,14 @@ def caption_distributions(df):
     return (
         f"<strong>Length distribution (left):</strong> "
         f"Peptide lengths range from <strong>{min_len}</strong> to <strong>{max_len} aa</strong>, "
-        f"with a mean of <strong>{mean_len:.1f} aa</strong>. "
-        f"Most peptides are short — very long sequences are rare in this dataset.<br><br>"
-
+        f"with a mean of <strong>{mean_len:.1f} aa</strong>.<br><br>"
         f"<strong>Taste classes (centre):</strong> "
         f"&ldquo;{dominant_taste}&rdquo; is the most represented class "
         f"(<strong>{dominant_count}</strong> peptides out of {len(df)} total, "
-        f"across {n_classes} classes). "
-        f"Class imbalances like this are why the model uses balanced class weighting during training.<br><br>"
-
+        f"across {n_classes} classes).<br><br>"
         f"<strong>GRAVY distribution (right):</strong> "
         f"The dataset's mean GRAVY score is <strong>{mean_gravy:.2f}</strong>, "
-        f"indicating the average peptide is <strong>{gravy_label}</strong>. "
-        f"Scores above 0 lean hydrophobic; below 0 lean hydrophilic."
+        f"indicating the average peptide is <strong>{gravy_label}</strong>."
     )
 
 
@@ -441,17 +568,12 @@ def caption_pca(pca_model, class_names):
     var2  = pca_model.explained_variance_ratio_[1] * 100
     total = var1 + var2
     return (
-        f"Each dot represents one peptide, compressed from hundreds of physicochemical features "
-        f"down to just 2 dimensions for visualisation.<br><br>"
-
-        f"<strong>PC1</strong> captures <strong>{var1:.1f}%</strong> of the total variance and "
+        f"Each dot represents one peptide compressed to 2 dimensions.<br><br>"
+        f"<strong>PC1</strong> captures <strong>{var1:.1f}%</strong> and "
         f"<strong>PC2</strong> captures <strong>{var2:.1f}%</strong> — "
-        f"together accounting for <strong>{total:.1f}%</strong> of all variation in the dataset.<br><br>"
-
-        f"<strong>Tight, well-separated colour clusters</strong> mean the model can reliably distinguish "
-        f"those taste classes. "
-        f"<strong>Overlapping clusters</strong> indicate classes that share similar amino acid profiles — "
-        f"expect higher confusion between those classes in the confusion matrix below."
+        f"together <strong>{total:.1f}%</strong> of all variation.<br><br>"
+        f"Tight, well-separated clusters mean reliable class distinction; "
+        f"overlapping clusters expect higher confusion matrix errors."
     )
 
 
@@ -468,21 +590,11 @@ def caption_confusion_taste(y_true, y_pred, class_names):
     best_cls      = class_names[np.argmax(per_class_acc)]
     worst_cls     = class_names[np.argmin(per_class_acc)]
     return (
-        f"The taste model achieved <strong>{acc:.1f}% overall accuracy</strong> "
-        f"on the held-out test set.<br><br>"
-
-        f"<strong>How to read this chart:</strong> Rows = actual taste class, "
-        f"Columns = what the model predicted. "
-        f"Numbers on the <em>diagonal</em> are correct predictions. "
-        f"Off-diagonal numbers are mistakes.<br><br>"
-
-        f"<strong>Most common confusion:</strong> Actual &ldquo;{true_cls}&rdquo; was predicted as "
-        f"&ldquo;{pred_cls}&rdquo; <strong>{worst_n} time(s)</strong> — "
-        f"likely because these two classes share similar physicochemical profiles.<br><br>"
-
-        f"<strong>Best-classified class:</strong> &ldquo;{best_cls}&rdquo; "
-        f"(highest per-class accuracy) &nbsp;&nbsp;|&nbsp;&nbsp; "
-        f"<strong>Hardest class:</strong> &ldquo;{worst_cls}&rdquo; (most off-diagonal errors)."
+        f"Taste model achieved <strong>{acc:.1f}% overall accuracy</strong> on the test set.<br><br>"
+        f"<strong>Most common confusion:</strong> &ldquo;{true_cls}&rdquo; predicted as "
+        f"&ldquo;{pred_cls}&rdquo; <strong>{worst_n} time(s)</strong>.<br><br>"
+        f"<strong>Best class:</strong> &ldquo;{best_cls}&rdquo; &nbsp;|&nbsp; "
+        f"<strong>Hardest class:</strong> &ldquo;{worst_cls}&rdquo;."
     )
 
 
@@ -496,16 +608,11 @@ def caption_confusion_sol(y_true, y_pred, class_names):
     pred_cls = class_names[idx[1]]
     worst_n  = int(cm_copy[idx])
     return (
-        f"The solubility model achieved <strong>{acc:.1f}% overall accuracy</strong> "
-        f"on the held-out test set.<br><br>"
-
+        f"Solubility model achieved <strong>{acc:.1f}% overall accuracy</strong>.<br><br>"
         f"<strong>Most common misclassification:</strong> "
-        f"Actual &ldquo;{true_cls}&rdquo; was predicted as "
-        f"&ldquo;{pred_cls}&rdquo; <strong>{worst_n} time(s)</strong>.<br><br>"
-
-        f"These errors typically occur for peptides with borderline hydrophobicity scores "
-        f"that fall close to the solubility decision boundary — "
-        f"neither clearly soluble nor clearly insoluble."
+        f"&ldquo;{true_cls}&rdquo; predicted as &ldquo;{pred_cls}&rdquo; "
+        f"<strong>{worst_n} time(s)</strong>.<br><br>"
+        f"Errors typically occur for peptides near the solubility decision boundary."
     )
 
 
@@ -516,25 +623,19 @@ def caption_feature_importance(model, feature_names, top_n=20):
     }).sort_values("Importance", ascending=False).head(top_n)
     top3        = [prettify_feature(f) for f in imp["Feature"].iloc[:3]]
     top3_scores = imp["Importance"].iloc[:3].tolist()
-    n_dpc       = sum(1 for f in imp["Feature"] if f.startswith("DPC_"))
-    n_aa        = sum(1 for f in imp["Feature"] if f.startswith("AA_"))
-    dpc_note    = (
-        "Dipeptide patterns dominate — meaning <em>sequential context</em> "
-        "matters more than raw composition alone."
+    n_dpc = sum(1 for f in imp["Feature"] if f.startswith("DPC_"))
+    n_aa  = sum(1 for f in imp["Feature"] if f.startswith("AA_"))
+    dpc_note = (
+        "Dipeptide patterns dominate — <em>sequential context</em> matters more than composition alone."
         if n_dpc > n_aa else
         "Single amino acid composition is the stronger predictor here."
     )
     return (
-        f"The top {top_n} features driving the taste model's decisions, "
-        f"ranked by importance score.<br><br>"
-
-        f"<strong>#1 &mdash; {top3[0]}</strong> &nbsp; (score: {top3_scores[0]:.4f})<br>"
-        f"<strong>#2 &mdash; {top3[1]}</strong> &nbsp; (score: {top3_scores[1]:.4f})<br>"
-        f"<strong>#3 &mdash; {top3[2]}</strong> &nbsp; (score: {top3_scores[2]:.4f})<br><br>"
-
-        f"Of the top {top_n}: <strong>{n_dpc}</strong> are dipeptide frequency features (DPC) and "
-        f"<strong>{n_aa}</strong> are single amino acid frequency features. "
-        f"{dpc_note}"
+        f"Top {top_n} features ranked by importance.<br><br>"
+        f"<strong>#1 — {top3[0]}</strong> (score: {top3_scores[0]:.4f})<br>"
+        f"<strong>#2 — {top3[1]}</strong> (score: {top3_scores[1]:.4f})<br>"
+        f"<strong>#3 — {top3[2]}</strong> (score: {top3_scores[2]:.4f})<br><br>"
+        f"{n_dpc} dipeptide (DPC) and {n_aa} single amino acid features in top {top_n}. {dpc_note}"
     )
 
 
@@ -545,96 +646,63 @@ def caption_docking(y_true, y_pred):
     max_score = y_true.max()
     quality   = "strong" if r2 >= 0.75 else ("moderate" if r2 >= 0.5 else "weak")
     return (
-        f"Each point is one peptide from the held-out test set. "
-        f"The <strong>red dashed line</strong> is the ideal reference — "
-        f"a perfect model would place all points exactly on this line.<br><br>"
-
-        f"<strong>R² = {r2:.3f}</strong> — indicates a <strong>{quality} fit</strong>. "
-        f"The model explains <strong>{r2*100:.1f}%</strong> of variance in docking scores.<br>"
-        f"<strong>RMSE = {rmse:.2f} kcal/mol</strong> — this is the typical prediction error per peptide.<br>"
-        f"True docking scores range from <strong>{min_score:.2f}</strong> to "
-        f"<strong>{max_score:.2f} kcal/mol</strong> in this test set.<br><br>"
-
-        f"Points <strong>above</strong> the diagonal = model over-estimated binding affinity. "
-        f"Points <strong>below</strong> the diagonal = model under-estimated it."
+        f"Each point is one peptide from the test set. Red dashed = perfect prediction.<br><br>"
+        f"<strong>R² = {r2:.3f}</strong> — <strong>{quality} fit</strong>. "
+        f"Explains <strong>{r2*100:.1f}%</strong> of variance.<br>"
+        f"<strong>RMSE = {rmse:.2f} kcal/mol</strong> — typical error per peptide.<br>"
+        f"True scores range <strong>{min_score:.2f}</strong> to <strong>{max_score:.2f} kcal/mol</strong>."
     )
 
 
 def caption_ramachandran(phi_psi, seq=""):
     if not phi_psi:
-        return (
-            "No φ/ψ angles could be extracted — the peptide may be too short "
-            "(fewer than 3 residues) or composed entirely of proline."
-        )
-    n_total      = len(phi_psi)
-    n_helix      = sum(1 for p, s in phi_psi if -180 <= p <= -45 and -75 <= s <= -15)
-    n_sheet      = sum(1 for p, s in phi_psi if -180 <= p <= -45 and 90  <= s <= 180)
-    n_disallowed = n_total - n_helix - n_sheet
-    pct_helix    = n_helix      / n_total * 100
-    pct_sheet    = n_sheet      / n_total * 100
-    pct_dis      = n_disallowed / n_total * 100
-    dominant     = "α-helix" if n_helix >= n_sheet else "β-sheet"
-    length_note  = f" for this <strong>{len(seq)}-residue peptide</strong>" if seq else ""
+        return "No φ/ψ angles — peptide may be too short (fewer than 3 residues)."
+    n_total  = len(phi_psi)
+    n_helix  = sum(1 for p, s in phi_psi if -180<=p<=-45 and -75<=s<=-15)
+    n_sheet  = sum(1 for p, s in phi_psi if -180<=p<=-45 and 90<=s<=180)
+    n_dis    = n_total - n_helix - n_sheet
+    dominant = "α-helix" if n_helix >= n_sheet else "β-sheet"
     return (
-        f"Each dot is one backbone torsion angle pair (φ, ψ){length_note}. "
-        f"The <strong>coloured shaded regions</strong> mark conformations typical "
-        f"of known secondary structures.<br><br>"
-
-        f"<strong>α-helix region (green):</strong> &nbsp; ~{pct_helix:.0f}% of residues<br>"
-        f"<strong>β-sheet region (blue):</strong> &nbsp; ~{pct_sheet:.0f}% of residues<br>"
-        f"<strong>Outside allowed regions:</strong> &nbsp; ~{pct_dis:.0f}% of residues "
-        f"— strained conformations, common in short or proline-rich peptides.<br><br>"
-
-        f"This peptide's backbone geometry primarily favours "
-        f"<strong>{dominant}</strong> character."
+        f"Each dot is one backbone torsion angle pair (φ, ψ)"
+        f"{f' for this <strong>{len(seq)}-residue peptide</strong>' if seq else ''}.<br><br>"
+        f"<strong>α-helix region:</strong> ~{n_helix/n_total*100:.0f}% of residues<br>"
+        f"<strong>β-sheet region:</strong> ~{n_sheet/n_total*100:.0f}% of residues<br>"
+        f"<strong>Outside allowed:</strong> ~{n_dis/n_total*100:.0f}% of residues<br><br>"
+        f"Backbone geometry primarily favours <strong>{dominant}</strong> character."
     )
 
 
 def caption_distance_map(dist_matrix, seq=""):
     n = dist_matrix.shape[0]
     if n < 2:
-        return "Distance map could not be computed — fewer than 2 Cα atoms detected."
-    mask       = ~np.eye(n, dtype=bool)
-    off_diag   = dist_matrix[mask]
-    max_dist   = off_diag.max()
-    min_dist   = off_diag.min()
+        return "Distance map could not be computed — fewer than 2 Cα atoms."
+    mask     = ~np.eye(n, dtype=bool)
+    off_diag = dist_matrix[mask]
+    max_dist = off_diag.max()
+    min_dist = off_diag.min()
     long_range = sum(
         1 for i in range(n) for j in range(n)
-        if abs(i - j) > 3 and dist_matrix[i, j] < 8.0
+        if abs(i-j) > 3 and dist_matrix[i,j] < 8.0
     )
-    fold_note  = (
+    fold_note = (
         "suggesting the peptide <strong>folds back on itself</strong>"
         if long_range > 0 else
         "consistent with an <strong>extended / linear conformation</strong>"
     )
-    seq_label  = (
-        f"for <strong>{seq}</strong> ({n} residues)"
-        if seq else
-        f"for this <strong>{n}-residue peptide</strong>"
-    )
     return (
-        f"Pairwise Cα–Cα distances {seq_label} — "
-        f"<strong>darker = closer in 3D space</strong>.<br><br>"
-
-        f"<strong>Nearest non-adjacent residues:</strong> &nbsp; {min_dist:.1f} Å apart<br>"
-        f"<strong>Furthest residue pair:</strong> &nbsp; {max_dist:.1f} Å apart<br>"
-        f"<strong>Long-range contacts</strong> (|i−j| &gt; 3, distance &lt; 8 Å): "
-        f"<strong>{long_range} pair(s)</strong> — {fold_note}.<br><br>"
-
-        f"The bright diagonal band is expected — adjacent residues are always ~3.8 Å apart."
+        f"Pairwise Cα–Cα distances — <strong>darker = closer in 3D</strong>.<br><br>"
+        f"Nearest non-adjacent: {min_dist:.1f} Å | Furthest pair: {max_dist:.1f} Å<br>"
+        f"Long-range contacts (|i−j|>3, &lt;8Å): <strong>{long_range}</strong> — {fold_note}."
     )
 
 
 # ==========================================================
-# SECTION 6C - MATPLOTLIB THEME
-# Detects Streamlit theme and adjusts plot colours
+# SECTION 6D - MATPLOTLIB THEME
 # ==========================================================
 
 def _is_dark_mode():
-    """Best-effort dark mode detection via Streamlit's theme config."""
     try:
-        theme = st.get_option("theme.base")
-        return theme == "dark"
+        return st.get_option("theme.base") == "dark"
     except Exception:
         return False
 
@@ -643,30 +711,15 @@ def get_plot_colors():
     dark = _is_dark_mode()
     if dark:
         return {
-            "fig_bg":  "#1a1d2e",
-            "ax_bg":   "#1e2140",
-            "text":    "#e8edf8",
-            "grid":    "#2e3560",
-            "accent1": "#5c7cfa",
-            "accent2": "#748ffc",
-            "accent3": "#4dd0e1",
-            "red":     "#ff6b6b",
-            "orange":  "#ffa94d",
-            "tick":    "#c5cff0",
+            "fig_bg": "#1a1d2e", "ax_bg": "#1e2140", "text": "#e8edf8",
+            "grid": "#2e3560", "accent1": "#5c7cfa", "accent2": "#748ffc",
+            "accent3": "#4dd0e1", "red": "#ff6b6b", "orange": "#ffa94d", "tick": "#c5cff0",
         }
-    else:
-        return {
-            "fig_bg":  "#f8f9fc",
-            "ax_bg":   "#ffffff",
-            "text":    "#1a1d2e",
-            "grid":    "#d0d5e8",
-            "accent1": "#1a56db",
-            "accent2": "#4361ee",
-            "accent3": "#0b7285",
-            "red":     "#c0392b",
-            "orange":  "#e67e22",
-            "tick":    "#4a5170",
-        }
+    return {
+        "fig_bg": "#f8f9fc", "ax_bg": "#ffffff", "text": "#1a1d2e",
+        "grid": "#d0d5e8", "accent1": "#1a56db", "accent2": "#4361ee",
+        "accent3": "#0b7285", "red": "#c0392b", "orange": "#e67e22", "tick": "#4a5170",
+    }
 
 
 def apply_plot_style(fig, axes_list):
@@ -685,260 +738,133 @@ def apply_plot_style(fig, axes_list):
 
 
 # ==========================================================
-# SECTION 7 - ESMFOLD STRUCTURE PREDICTION
-# Replaces PeptideBuilder with AI-based folding
+# SECTION 7 - ESMFOLD API STRUCTURE PREDICTION
+# No local torch/transformers needed — uses Meta's public API
 # ==========================================================
-
-@st.cache_resource
-def load_esmfold():
-    """
-    Load ESMFold model once and cache for the session.
-    Automatically uses GPU if CUDA is available, otherwise CPU.
-
-    Required installation:
-        pip install torch torchvision
-        pip install transformers>=4.24.0
-        pip install accelerate
-        pip install fair-esm
-    """
-    try:
-        import torch
-        from transformers import EsmForProteinFolding, AutoTokenizer
-
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        st.sidebar.info(f"ESMFold device: **{device.upper()}**")
-
-        tokenizer = AutoTokenizer.from_pretrained("facebook/esmfold_v1")
-        model = EsmForProteinFolding.from_pretrained(
-            "facebook/esmfold_v1",
-            low_cpu_mem_usage=True,
-        )
-        model = model.to(device)
-        model.eval()
-
-        # Reduce memory footprint on CPU
-        if device == "cpu":
-            model.esm = model.esm.half()
-
-        return tokenizer, model, device
-
-    except ImportError as e:
-        return None, None, str(e)
-    except Exception as e:
-        return None, None, str(e)
-
-
-def _esmfold_to_pdb(output, tokenizer) -> tuple[str, float]:
-    """
-    Convert ESMFold model output to PDB string and extract mean pLDDT.
-
-    Returns:
-        pdb_text (str): Full PDB file content.
-        mean_plddt (float): Mean per-residue confidence score (0–100).
-    """
-    import torch
-
-    # Extract pLDDT confidence scores (per-residue, 0–100)
-    plddt = output.plddt[0].detach().cpu().float().numpy()  # shape: (L,)
-    mean_plddt = float(plddt.mean())
-
-    # Convert to PDB via ESMFold's built-in converter
-    # output.positions: (num_recycling, L, 37, 3) — take the last recycling step
-    from esm.esmfold.v1 import misc as esm_misc
-
-    # Use the protein_to_pdb helper that ships with fair-esm
-    pdb_string = esm_misc.output_to_pdb(output)[0]
-
-    return pdb_string, mean_plddt
-
-
-def _manual_pdb_from_output(output, sequence: str) -> tuple[str, float]:
-    """
-    Fallback PDB writer that works without fair-esm's output_to_pdb helper.
-    Writes Cα-only ATOM records from ESMFold's predicted positions.
-
-    Returns:
-        pdb_text (str): PDB file content.
-        mean_plddt (float): Mean pLDDT confidence (0–100).
-    """
-    import torch
-
-    THREE_LETTER = {
-        "A": "ALA", "C": "CYS", "D": "ASP", "E": "GLU", "F": "PHE",
-        "G": "GLY", "H": "HIS", "I": "ILE", "K": "LYS", "L": "LEU",
-        "M": "MET", "N": "ASN", "P": "PRO", "Q": "GLN", "R": "ARG",
-        "S": "SER", "T": "THR", "V": "VAL", "W": "TRP", "Y": "TYR",
-    }
-
-    # pLDDT: (1, L, num_atoms) — atom 1 is Cα
-    plddt_per_residue = output.plddt[0, :, 1].detach().cpu().float().numpy()
-    mean_plddt = float(plddt_per_residue.mean())
-
-    # positions: (num_recycling_steps, 1, L, 37, 3)
-    # Last recycling step, batch 0, all residues, Cα atom index = 1
-    positions = output.positions[-1, 0, :, 1, :].detach().cpu().float().numpy()
-
-    lines = ["REMARK  PepTastePredictor — ESMFold predicted structure (Cα trace)"]
-    for i, (aa, (x, y, z)) in enumerate(zip(sequence, positions)):
-        res_name = THREE_LETTER.get(aa, "UNK")
-        b_factor = float(plddt_per_residue[i]) if i < len(plddt_per_residue) else 0.0
-        lines.append(
-            f"ATOM  {i+1:5d}  CA  {res_name} A{i+1:4d}    "
-            f"{x:8.3f}{y:8.3f}{z:8.3f}  1.00{b_factor:6.2f}           C"
-        )
-    lines.append("END")
-    return "\n".join(lines), mean_plddt
-
 
 def build_peptide_pdb(seq: str) -> str:
     """
-    Generate a 3D structure for the given amino acid sequence using ESMFold.
-
-    Replaces the PeptideBuilder extended-chain generator with a real
-    AI-based protein folding prediction.
+    Predict 3D structure via ESMFold public REST API.
+    Works on Streamlit Cloud with zero extra installs.
+    Falls back to PeptideBuilder if API is unreachable.
 
     Args:
-        seq: Cleaned amino acid sequence (single-letter codes, uppercase).
+        seq: Cleaned amino acid sequence (any length ≥ 1).
 
     Returns:
-        pdb_text (str): Full PDB file content of the predicted structure.
-
-    Side effects:
-        - Saves the PDB to 'predicted_peptide.pdb'.
-        - Displays pLDDT confidence in the Streamlit UI.
-        - Shows warnings/errors via Streamlit if ESMFold is unavailable.
+        pdb_text (str): PDB file content.
     """
-    import torch
 
-    # ── 1. Load (cached) ESMFold ───────────────────────────────────────────
-    tokenizer, model, device = load_esmfold()
+    # ESMFold API requires ≥ 1 residue; pad single AA to triplet for folding
+    fold_seq = seq if len(seq) >= 2 else seq * 3
 
-    if tokenizer is None or model is None:
-        # ESMFold not available — fall back gracefully with a warning
-        st.warning(
-            f"⚠️ ESMFold could not be loaded ({device}). "
-            "Falling back to extended-chain PeptideBuilder structure.\n\n"
-            "To enable ESMFold, run:\n"
-            "```\npip install torch transformers>=4.24.0 accelerate fair-esm\n```"
-        )
-        return _fallback_peptidebuilder(seq)
-
-    # ── 2. Tokenise ────────────────────────────────────────────────────────
-    try:
-        tokenized = tokenizer(
-            [seq],
-            return_tensors="pt",
-            add_special_tokens=False,
-        )
-        tokenized = {k: v.to(device) for k, v in tokenized.items()}
-    except Exception as e:
-        st.error(f"ESMFold tokenisation failed: {e}")
-        return _fallback_peptidebuilder(seq)
-
-    # ── 3. Run folding inference ───────────────────────────────────────────
-    with st.spinner("🔬 ESMFold is predicting structure… this may take 30–90 s"):
+    with st.spinner("🔬 ESMFold API: predicting 3D structure…"):
         try:
-            with torch.no_grad():
-                output = model(**tokenized)
+            response = requests.post(
+                ESMFOLD_API_URL,
+                data=fold_seq,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=120,
+            )
+            response.raise_for_status()
+            pdb_text = response.text
+
+            # If original was single AA, trim to first residue only
+            if len(seq) == 1:
+                pdb_text = _trim_pdb_to_n_residues(pdb_text, 1)
+
+            # Save to disk
+            with open("predicted_peptide.pdb", "w") as f:
+                f.write(pdb_text)
+
+            # Extract and display pLDDT
+            mean_plddt = _extract_plddt(pdb_text)
+            if mean_plddt is not None:
+                _display_plddt(mean_plddt)
+
+            st.markdown('<div class="esm-badge">✅ ESMFold API — structure predicted</div>',
+                        unsafe_allow_html=True)
+            return pdb_text
+
+        except requests.exceptions.Timeout:
+            st.warning("⏱️ ESMFold API timed out (>120s). Using PeptideBuilder fallback.")
+        except requests.exceptions.ConnectionError:
+            st.warning("🌐 ESMFold API unreachable (offline?). Using PeptideBuilder fallback.")
+        except requests.exceptions.HTTPError as e:
+            st.warning(f"⚠️ ESMFold API error ({e}). Using PeptideBuilder fallback.")
         except Exception as e:
-            st.error(f"ESMFold inference failed: {e}")
-            return _fallback_peptidebuilder(seq)
+            st.warning(f"⚠️ Unexpected error: {e}. Using PeptideBuilder fallback.")
 
-    # ── 4. Convert output → PDB text ──────────────────────────────────────
-    pdb_text = None
-    mean_plddt = None
+    return _fallback_peptidebuilder(seq)
 
-    # Try the canonical fair-esm helper first
-    try:
-        pdb_text, mean_plddt = _esmfold_to_pdb(output, tokenizer)
-    except Exception:
-        pass  # fall through to manual writer
 
-    # Fallback to our manual Cα writer
-    if pdb_text is None:
-        try:
-            pdb_text, mean_plddt = _manual_pdb_from_output(output, seq)
-        except Exception as e:
-            st.error(f"PDB conversion failed: {e}")
-            return _fallback_peptidebuilder(seq)
+def _extract_plddt(pdb_text: str) -> float | None:
+    """
+    Extract mean pLDDT from PDB B-factor column.
+    ESMFold stores pLDDT as B-factors in the PDB output.
+    """
+    scores = []
+    for line in pdb_text.splitlines():
+        if line.startswith("ATOM") and len(line) >= 66:
+            try:
+                scores.append(float(line[60:66].strip()))
+            except ValueError:
+                pass
+    return float(np.mean(scores)) if scores else None
 
-    # ── 5. Save PDB to disk ───────────────────────────────────────────────
-    pdb_path = "predicted_peptide.pdb"
-    try:
-        with open(pdb_path, "w") as f:
-            f.write(pdb_text)
-    except Exception as e:
-        st.warning(f"Could not save PDB file: {e}")
 
-    # ── 6. Display pLDDT confidence ───────────────────────────────────────
-    if mean_plddt is not None:
-        _display_plddt(mean_plddt)
-
-    return pdb_text
+def _trim_pdb_to_n_residues(pdb_text: str, n: int) -> str:
+    """Keep only ATOM records for the first n residues."""
+    lines = []
+    seen_res = set()
+    for line in pdb_text.splitlines():
+        if line.startswith("ATOM"):
+            res_id = (line[21], line[22:26].strip())
+            seen_res.add(res_id)
+            if len(seen_res) <= n:
+                lines.append(line)
+        elif line.startswith("END"):
+            lines.append(line)
+    return "\n".join(lines)
 
 
 def _display_plddt(mean_plddt: float):
-    """
-    Show a colour-coded pLDDT confidence indicator in the Streamlit UI.
-
-    pLDDT interpretation (AlphaFold / ESMFold convention):
-        ≥ 90   Very high confidence — likely accurate
-        70–90  Confident
-        50–70  Low confidence — treat with caution
-        < 50   Very low confidence — likely disordered
-    """
+    """Colour-coded pLDDT confidence badge with animated bar."""
     if mean_plddt >= 90:
-        colour = "#27ae60"
-        label  = "Very high confidence"
+        colour, label = "#12b886", "Very high confidence"
     elif mean_plddt >= 70:
-        colour = "#2980b9"
-        label  = "Confident"
+        colour, label = "#1a8fd1", "Confident"
     elif mean_plddt >= 50:
-        colour = "#f39c12"
-        label  = "Low confidence"
+        colour, label = "#f39c12", "Low confidence"
     else:
-        colour = "#c0392b"
-        label  = "Very low confidence"
+        colour, label = "#c0392b", "Very low confidence"
 
-    st.markdown(
-        f"""
-        <div style="
-            border-left: 6px solid {colour};
-            padding: 12px 20px;
-            border-radius: 0 10px 10px 0;
-            background: {colour}18;
-            margin: 12px 0 20px 0;
-        ">
-            <span style="font-weight:700; font-size:15px; color:{colour};">
-                ESMFold pLDDT: {mean_plddt:.1f} / 100
-            </span>
-            &nbsp;&nbsp;
-            <span style="font-size:14px; opacity:0.85;">
-                {label}
-            </span>
-            <br>
-            <span style="font-size:12px; opacity:0.7;">
-                pLDDT is ESMFold's per-residue confidence score.
-                ≥90 = very reliable; 70–90 = good; 50–70 = use with caution; &lt;50 = likely disordered.
-            </span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    bar_width = min(int(mean_plddt), 100)
+    st.markdown(f"""
+    <div style="border-left:6px solid {colour};padding:14px 20px;border-radius:0 12px 12px 0;
+                background:{colour}12;margin:12px 0 20px 0;">
+      <div style="font-weight:700;font-size:15px;color:{colour};">
+        ESMFold pLDDT: {mean_plddt:.1f} / 100 &nbsp; — &nbsp; {label}
+      </div>
+      <div style="background:rgba(128,128,180,0.15);border-radius:6px;height:10px;margin:8px 0 4px 0;overflow:hidden;">
+        <div style="height:10px;border-radius:6px;width:{bar_width}%;background:{colour};transition:width 1s ease;"></div>
+      </div>
+      <div style="font-size:11px;opacity:0.65;margin-top:4px;">
+        ≥90 = very reliable &nbsp;|&nbsp; 70–90 = good &nbsp;|&nbsp; 50–70 = use with caution &nbsp;|&nbsp; &lt;50 = likely disordered
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 
 def _fallback_peptidebuilder(seq: str) -> str:
-    """
-    Emergency fallback: build an extended-chain PDB using PeptideBuilder.
-    Only used when ESMFold is unavailable.
-    """
+    """Extended-chain fallback using PeptideBuilder (no AI folding)."""
     try:
         import PeptideBuilder
         from PeptideBuilder import Geometry
-        from Bio.PDB import PDBIO
 
-        structure = PeptideBuilder.initialize_res(seq[0])
-        for aa in seq[1:]:
+        build_seq = seq if len(seq) >= 2 else seq + "G"
+        structure = PeptideBuilder.initialize_res(build_seq[0])
+        for aa in build_seq[1:]:
             PeptideBuilder.add_residue(structure, Geometry.geometry(aa))
 
         io = PDBIO()
@@ -947,16 +873,16 @@ def _fallback_peptidebuilder(seq: str) -> str:
         with open("predicted_peptide.pdb") as f:
             pdb_text = f.read()
 
-        st.info("ℹ️ Extended-chain structure generated via PeptideBuilder (no AI folding).")
+        st.info("ℹ️ Extended-chain structure (PeptideBuilder fallback — no AI folding).")
         return pdb_text
 
     except Exception as e:
-        st.error(f"Both ESMFold and PeptideBuilder fallback failed: {e}")
+        st.error(f"Both ESMFold API and PeptideBuilder failed: {e}")
         return ""
 
 
 # ==========================================================
-# SECTION 8 - STRUCTURE ANALYSIS (UNCHANGED)
+# SECTION 8 - STRUCTURE ANALYSIS
 # ==========================================================
 
 def show_structure(pdb_text):
@@ -1024,35 +950,29 @@ def ca_rmsd(pdb_text):
 
 
 # ==========================================================
-# SECTION 9 - PLOT FUNCTIONS (UNCHANGED)
+# SECTION 9 - PLOT FUNCTIONS
 # ==========================================================
 
 def plot_pca(X, y_labels, class_names, title="PCA"):
     C = get_plot_colors()
-    pca    = PCA(n_components=2)
-    coords = pca.fit_transform(X)
-    var1   = pca.explained_variance_ratio_[0] * 100
-    var2   = pca.explained_variance_ratio_[1] * 100
+    pca     = PCA(n_components=2)
+    coords  = pca.fit_transform(X)
+    var1    = pca.explained_variance_ratio_[0] * 100
+    var2    = pca.explained_variance_ratio_[1] * 100
     palette = plt.cm.get_cmap("tab20", len(class_names))
     fig, ax = plt.subplots(figsize=(9, 6))
     apply_plot_style(fig, [ax])
     for i, cls in enumerate(class_names):
         mask = y_labels == i
-        ax.scatter(
-            coords[mask, 0], coords[mask, 1],
-            label=cls, alpha=0.75, s=35,
-            color=palette(i), edgecolors="none",
-        )
+        ax.scatter(coords[mask, 0], coords[mask, 1],
+                   label=cls, alpha=0.75, s=35,
+                   color=palette(i), edgecolors="none")
     ax.set_xlabel(f"PC1 ({var1:.1f}% variance)", fontsize=12, labelpad=10)
     ax.set_ylabel(f"PC2 ({var2:.1f}% variance)", fontsize=12, labelpad=10)
     ax.set_title(title, fontsize=13, fontweight="bold", pad=12)
-    legend = ax.legend(
-        fontsize=8, bbox_to_anchor=(1.02, 1),
-        loc="upper left", borderaxespad=0,
-        title="Taste class", title_fontsize=9,
-        facecolor=C["fig_bg"],
-        edgecolor=C["grid"],
-    )
+    legend = ax.legend(fontsize=8, bbox_to_anchor=(1.02, 1), loc="upper left",
+                       borderaxespad=0, title="Taste class", title_fontsize=9,
+                       facecolor=C["fig_bg"], edgecolor=C["grid"])
     legend.get_title().set_color(C["text"])
     for text in legend.get_texts():
         text.set_color(C["text"])
@@ -1061,24 +981,19 @@ def plot_pca(X, y_labels, class_names, title="PCA"):
 
 
 def plot_confusion(y_true, y_pred, class_names, title, cmap):
-    C = get_plot_colors()
+    C   = get_plot_colors()
     cm  = confusion_matrix(y_true, y_pred)
     acc = accuracy_score(y_true, y_pred)
     n   = len(class_names)
     fig, ax = plt.subplots(figsize=(max(6, n * 0.75), max(5, n * 0.6)))
     apply_plot_style(fig, [ax])
     annot_color = "#111122" if not _is_dark_mode() else "#ffffff"
-    sns.heatmap(
-        cm, annot=True, fmt="d", cmap=cmap,
-        xticklabels=class_names,
-        yticklabels=class_names,
-        ax=ax, linewidths=0.4, linecolor=C["grid"],
-        annot_kws={"size": 11, "color": annot_color},
-    )
-    ax.set_title(
-        f"{title}  —  Accuracy: {acc * 100:.1f}%",
-        fontsize=14, fontweight="bold", pad=14,
-    )
+    sns.heatmap(cm, annot=True, fmt="d", cmap=cmap,
+                xticklabels=class_names, yticklabels=class_names,
+                ax=ax, linewidths=0.4, linecolor=C["grid"],
+                annot_kws={"size": 11, "color": annot_color})
+    ax.set_title(f"{title}  —  Accuracy: {acc*100:.1f}%",
+                 fontsize=14, fontweight="bold", pad=14)
     ax.set_xlabel("Predicted", fontsize=12, labelpad=10)
     ax.set_ylabel("True",      fontsize=12, labelpad=10)
     cbar = ax.collections[0].colorbar
@@ -1091,34 +1006,22 @@ def plot_confusion(y_true, y_pred, class_names, title, cmap):
 
 
 def plot_docking(y_true, y_pred):
-    C = get_plot_colors()
+    C    = get_plot_colors()
     r2   = r2_score(y_true, y_pred)
     rmse = np.sqrt(mean_squared_error(y_true, y_pred))
-    lims = [
-        min(y_true.min(), y_pred.min()) - 1,
-        max(y_true.max(), y_pred.max()) + 1,
-    ]
+    lims = [min(y_true.min(), y_pred.min()) - 1, max(y_true.max(), y_pred.max()) + 1]
     fig, ax = plt.subplots(figsize=(6, 6))
     apply_plot_style(fig, [ax])
-    ax.scatter(
-        y_true, y_pred, alpha=0.65,
-        edgecolors="none",
-        color=C["accent1"], s=45,
-    )
+    ax.scatter(y_true, y_pred, alpha=0.65, edgecolors="none", color=C["accent1"], s=45)
     ax.plot(lims, lims, color=C["red"], linestyle="--", lw=1.8, label="Perfect fit")
-    ax.set_xlim(lims)
-    ax.set_ylim(lims)
-    box_bg = C["fig_bg"]
-    ax.annotate(
-        f"R² = {r2:.3f}\nRMSE = {rmse:.2f} kcal/mol",
-        xy=(0.05, 0.87), xycoords="axes fraction", fontsize=11,
-        color=C["text"],
-        bbox=dict(boxstyle="round,pad=0.5", fc=box_bg, ec=C["grid"], alpha=0.95),
-    )
+    ax.set_xlim(lims); ax.set_ylim(lims)
+    ax.annotate(f"R² = {r2:.3f}\nRMSE = {rmse:.2f} kcal/mol",
+                xy=(0.05, 0.87), xycoords="axes fraction", fontsize=11,
+                color=C["text"],
+                bbox=dict(boxstyle="round,pad=0.5", fc=C["fig_bg"], ec=C["grid"], alpha=0.95))
     ax.set_xlabel("True Docking Score (kcal/mol)",      fontsize=12, labelpad=10)
     ax.set_ylabel("Predicted Docking Score (kcal/mol)", fontsize=12, labelpad=10)
-    ax.set_title("Docking: True vs Predicted (test set)", fontsize=13,
-                 fontweight="bold", pad=12)
+    ax.set_title("Docking: True vs Predicted (test set)", fontsize=13, fontweight="bold", pad=12)
     legend = ax.legend(fontsize=10, facecolor=C["fig_bg"], edgecolor=C["grid"])
     for text in legend.get_texts():
         text.set_color(C["text"])
@@ -1135,11 +1038,9 @@ def plot_feature_importance(model, feature_names, top_n=20):
     colors = plt.cm.Blues(np.linspace(0.4, 0.9, len(imp))[::-1])
     fig, ax = plt.subplots(figsize=(8, 7))
     apply_plot_style(fig, [ax])
-    ax.barh(imp["Feature"][::-1], imp["Importance"][::-1],
-            color=colors, edgecolor=C["grid"])
+    ax.barh(imp["Feature"][::-1], imp["Importance"][::-1], color=colors, edgecolor=C["grid"])
     ax.set_xlabel("Importance Score", fontsize=12, labelpad=10)
-    ax.set_title(f"Top {top_n} Features — Taste Model", fontsize=13,
-                 fontweight="bold", pad=12)
+    ax.set_title(f"Top {top_n} Features — Taste Model", fontsize=13, fontweight="bold", pad=12)
     ax.tick_params(axis="y", labelsize=9, colors=C["tick"])
     ax.tick_params(axis="x", labelsize=9, colors=C["tick"])
     plt.tight_layout()
@@ -1147,52 +1048,39 @@ def plot_feature_importance(model, feature_names, top_n=20):
 
 
 def plot_distributions(df):
-    C = get_plot_colors()
+    C            = get_plot_colors()
     seq_lengths  = [len(s) for s in df["peptide"]]
     taste_counts = df["taste"].value_counts()
     gravy_vals   = [gravy_score(s) for s in df["peptide"]]
-
-    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+    fig, axes    = plt.subplots(1, 3, figsize=(16, 5))
     apply_plot_style(fig, axes)
 
-    # Length histogram
-    axes[0].hist(seq_lengths, bins=20,
-                 color=C["accent1"], edgecolor=C["grid"], alpha=0.85)
     mean_len = np.mean(seq_lengths)
-    axes[0].axvline(mean_len, color=C["red"], linestyle="--", lw=2,
-                    label=f"Mean = {mean_len:.1f} aa")
+    axes[0].hist(seq_lengths, bins=20, color=C["accent1"], edgecolor=C["grid"], alpha=0.85)
+    axes[0].axvline(mean_len, color=C["red"], linestyle="--", lw=2, label=f"Mean = {mean_len:.1f} aa")
     axes[0].set_xlabel("Sequence Length (aa)", fontsize=11, labelpad=8)
-    axes[0].set_ylabel("Count",                fontsize=11, labelpad=8)
-    axes[0].set_title("Peptide Length Distribution", fontsize=12,
-                      fontweight="bold", pad=10)
+    axes[0].set_ylabel("Count", fontsize=11, labelpad=8)
+    axes[0].set_title("Peptide Length Distribution", fontsize=12, fontweight="bold", pad=10)
     leg0 = axes[0].legend(fontsize=9, facecolor=C["fig_bg"], edgecolor=C["grid"])
     for t in leg0.get_texts(): t.set_color(C["text"])
 
-    # Taste bar chart
     n_cls      = len(taste_counts)
     bar_colors = plt.cm.get_cmap("tab20", n_cls)(np.linspace(0, 1, n_cls))
-    axes[1].barh(taste_counts.index, taste_counts.values,
-                 color=bar_colors, edgecolor=C["grid"], alpha=0.9)
+    axes[1].barh(taste_counts.index, taste_counts.values, color=bar_colors, edgecolor=C["grid"], alpha=0.9)
     axes[1].set_xlabel("Number of Peptides", fontsize=11, labelpad=8)
-    axes[1].set_title("Taste Class Distribution", fontsize=12,
-                      fontweight="bold", pad=10)
+    axes[1].set_title("Taste Class Distribution", fontsize=12, fontweight="bold", pad=10)
     axes[1].tick_params(axis="y", labelsize=9, colors=C["tick"])
     axes[1].tick_params(axis="x", labelsize=9, colors=C["tick"])
     for i, v in enumerate(taste_counts.values):
-        axes[1].text(v + 0.3, i, str(v), va="center",
-                     fontsize=9, color=C["text"])
+        axes[1].text(v + 0.3, i, str(v), va="center", fontsize=9, color=C["text"])
 
-    # GRAVY histogram
-    axes[2].hist(gravy_vals, bins=20,
-                 color=C["accent2"], edgecolor=C["grid"], alpha=0.85)
-    axes[2].axvline(0, color=C["red"], linestyle="--", lw=2,
-                    label="Hydrophilic | Hydrophobic")
+    axes[2].hist(gravy_vals, bins=20, color=C["accent2"], edgecolor=C["grid"], alpha=0.85)
+    axes[2].axvline(0, color=C["red"], linestyle="--", lw=2, label="Hydrophilic | Hydrophobic")
     axes[2].axvline(np.mean(gravy_vals), color=C["orange"], linestyle="--", lw=2,
                     label=f"Mean = {np.mean(gravy_vals):.2f}")
     axes[2].set_xlabel("GRAVY Score", fontsize=11, labelpad=8)
-    axes[2].set_ylabel("Count",       fontsize=11, labelpad=8)
-    axes[2].set_title("GRAVY Hydrophobicity Distribution", fontsize=12,
-                      fontweight="bold", pad=10)
+    axes[2].set_ylabel("Count", fontsize=11, labelpad=8)
+    axes[2].set_title("GRAVY Hydrophobicity Distribution", fontsize=12, fontweight="bold", pad=10)
     leg2 = axes[2].legend(fontsize=8, facecolor=C["fig_bg"], edgecolor=C["grid"])
     for t in leg2.get_texts(): t.set_color(C["text"])
 
@@ -1204,28 +1092,21 @@ def plot_ramachandran(phi_psi):
     C = get_plot_colors()
     fig, ax = plt.subplots(figsize=(6, 6))
     apply_plot_style(fig, [ax])
-    ax.fill([-180, -180, -45, -45, -180], [-75, -45, -45, -75, -75],
-            color="#4CAF50", alpha=0.25, label="α-helix (allowed)")
-    ax.fill([-180, -180, -90, -90, -180], [90, 180, 180, 90, 90],
-            color="#2196F3", alpha=0.25, label="β-sheet (allowed)")
-    ax.fill([45, 45, 90, 90, 45], [0, 90, 90, 0, 0],
-            color="#FF9800", alpha=0.2, label="L-helix (allowed)")
+    ax.fill([-180,-180,-45,-45,-180], [-75,-45,-45,-75,-75], color="#4CAF50", alpha=0.25, label="α-helix (allowed)")
+    ax.fill([-180,-180,-90,-90,-180], [90,180,180,90,90],    color="#2196F3", alpha=0.25, label="β-sheet (allowed)")
+    ax.fill([45,45,90,90,45],         [0,90,90,0,0],         color="#FF9800", alpha=0.2,  label="L-helix (allowed)")
     if phi_psi:
         phi, psi = zip(*phi_psi)
-        ax.scatter(phi, psi, s=50, color=C["red"], zorder=5,
-                   edgecolors="white", linewidths=0.5)
+        ax.scatter(phi, psi, s=50, color=C["red"], zorder=5, edgecolors="white", linewidths=0.5)
     ax.axhline(0, color=C["grid"], lw=0.8, linestyle="--")
     ax.axvline(0, color=C["grid"], lw=0.8, linestyle="--")
-    ax.set_xlim(-180, 180)
-    ax.set_ylim(-180, 180)
+    ax.set_xlim(-180, 180); ax.set_ylim(-180, 180)
     ax.set_xlabel("Phi φ (°)", fontsize=12, labelpad=10)
     ax.set_ylabel("Psi ψ (°)", fontsize=12, labelpad=10)
     ax.set_title("Ramachandran Plot", fontsize=13, fontweight="bold", pad=12)
-    leg = ax.legend(fontsize=9, loc="upper right",
-                    facecolor=C["fig_bg"], edgecolor=C["grid"])
+    leg = ax.legend(fontsize=9, loc="upper right", facecolor=C["fig_bg"], edgecolor=C["grid"])
     for t in leg.get_texts(): t.set_color(C["text"])
-    ax.set_xticks(range(-180, 181, 60))
-    ax.set_yticks(range(-180, 181, 60))
+    ax.set_xticks(range(-180, 181, 60)); ax.set_yticks(range(-180, 181, 60))
     plt.tight_layout()
     return fig
 
@@ -1236,17 +1117,15 @@ def plot_distance_map(dist_matrix, seq=""):
     if seq and len(seq) == n:
         labels = [f"{aa}{i+1}" for i, aa in enumerate(seq)]
     else:
-        labels = [str(i + 1) for i in range(n)]
+        labels = [str(i+1) for i in range(n)]
     tick_step   = max(1, n // 15)
     show_labels = [labels[i] if i % tick_step == 0 else "" for i in range(n)]
     size        = max(5, n * 0.3 + 2)
     fig, ax     = plt.subplots(figsize=(size, size))
     apply_plot_style(fig, [ax])
-    sns.heatmap(
-        dist_matrix, cmap="viridis", ax=ax,
-        xticklabels=show_labels, yticklabels=show_labels,
-        linewidths=0, cbar_kws={"label": "Distance (Å)"},
-    )
+    sns.heatmap(dist_matrix, cmap="viridis", ax=ax,
+                xticklabels=show_labels, yticklabels=show_labels,
+                linewidths=0, cbar_kws={"label": "Distance (Å)"})
     ax.set_title("Cα Distance Map", fontsize=13, fontweight="bold", pad=12)
     ax.set_xlabel("Residue", fontsize=12, labelpad=10)
     ax.set_ylabel("Residue", fontsize=12, labelpad=10)
@@ -1260,7 +1139,7 @@ def plot_distance_map(dist_matrix, seq=""):
 
 
 # ==========================================================
-# SECTION 10 - STRUCTURAL ANALYSIS HELPER (UNCHANGED)
+# SECTION 10 - STRUCTURAL ANALYSIS HELPER
 # ==========================================================
 
 def render_structural_analysis(pdb_text, prefix="", seq=""):
@@ -1268,7 +1147,7 @@ def render_structural_analysis(pdb_text, prefix="", seq=""):
     st.markdown("### 📐 Ramachandran Plot")
     phi_psi = ramachandran(pdb_text)
     if not phi_psi:
-        st.info("No phi/psi angles found — peptide may be too short.")
+        st.info("No phi/psi angles — peptide may be too short.")
     fig_rama = plot_ramachandran(phi_psi)
     save_fig(fig_rama, f"{prefix}ramachandran.png")
     st.pyplot(fig_rama)
@@ -1286,7 +1165,7 @@ def render_structural_analysis(pdb_text, prefix="", seq=""):
 
 
 # ==========================================================
-# SECTION 11 - MODEL TRAINING (UNCHANGED)
+# SECTION 11 - MODEL TRAINING
 # ==========================================================
 
 @st.cache_data
@@ -1298,7 +1177,7 @@ def train_models():
     df = pd.read_excel(DATASET_PATH)
     df.columns = df.columns.str.lower().str.strip()
     df["peptide"] = df["peptide"].apply(clean_sequence)
-    df = df[df["peptide"].str.len() >= 2].reset_index(drop=True)
+    df = df[df["peptide"].str.len() >= 1].reset_index(drop=True)   # allow 1 AA
     df = df[
         df["taste"].notna()
         & df["solubility"].notna()
@@ -1347,7 +1226,7 @@ def train_models():
 
 
 # ==========================================================
-# SECTION 12 - LOAD MODELS (UNCHANGED)
+# SECTION 12 - LOAD MODELS
 # ==========================================================
 
 (
@@ -1358,7 +1237,7 @@ def train_models():
 
 
 # ==========================================================
-# SECTION 13 - PDF REPORT ENGINE (UNCHANGED)
+# SECTION 13 - PDF REPORT ENGINE
 # ==========================================================
 
 def generate_pdf(metrics, prediction, image_paths):
@@ -1366,66 +1245,55 @@ def generate_pdf(metrics, prediction, image_paths):
     styles    = getSampleStyleSheet()
     doc       = SimpleDocTemplate(file_name, pagesize=A4)
     story     = []
-
     story.append(Paragraph("<b>PepTastePredictor</b>", styles["Title"]))
     story.append(Spacer(1, 12))
     story.append(Paragraph(
         "AI-driven peptide taste, solubility, docking, and structural analysis platform.",
-        styles["Normal"],
-    ))
+        styles["Normal"]))
     story.append(Spacer(1, 12))
-
     story.append(Paragraph("<b>Model Performance</b>", styles["Heading2"]))
     for k, v in metrics.items():
         story.append(Paragraph(f"{k}: {round(v, 4)}", styles["Normal"]))
     story.append(Spacer(1, 12))
-
     if prediction:
         story.append(Paragraph("<b>Prediction Results</b>", styles["Heading2"]))
         for k, v in prediction.items():
             story.append(Paragraph(f"{k}: {v}", styles["Normal"]))
         story.append(Spacer(1, 12))
-
     story.append(Paragraph("<b>Visual Analytics</b>", styles["Heading2"]))
     story.append(Spacer(1, 12))
     for img in image_paths:
         if os.path.exists(img):
             story.append(RLImage(img, width=450, height=300))
             story.append(Spacer(1, 18))
-
     doc.build(story)
     return file_name
 
 
 # ==========================================================
-# SECTION 14 - HERO HEADER (UNCHANGED)
+# SECTION 14 - HERO HEADER
 # ==========================================================
 
 st.markdown("""
 <div class="hero">
 <h1>🧬 PepTastePredictor</h1>
 <p>
-An integrated machine learning and structural bioinformatics platform
-for peptide taste, solubility, docking, and structural analysis.
-Powered by <strong>ESMFold</strong> for AI-based 3D structure prediction.
+An integrated machine learning &amp; structural bioinformatics platform for peptide
+taste, solubility, docking, and 3D structure analysis.
+Powered by <strong>Meta ESMFold API</strong> — real AI folding, no GPU required.
 </p>
 </div>
 """, unsafe_allow_html=True)
 
 
 # ==========================================================
-# SECTION 15 - MODE SELECTION (UNCHANGED)
+# SECTION 15 - MODE SELECTION
 # ==========================================================
 
 st.markdown("## 🔧 Prediction & Analysis Mode")
-
 mode = st.radio(
     "Choose the analysis mode",
-    [
-        "Single Peptide Prediction",
-        "Batch Peptide Prediction",
-        "PDB Upload & Structural Analysis",
-    ],
+    ["Single Peptide Prediction", "Batch Peptide Prediction", "PDB Upload & Structural Analysis"],
     horizontal=True,
 )
 
@@ -1433,66 +1301,123 @@ if "current_mode" not in st.session_state or st.session_state.current_mode != mo
     st.session_state.pdf_figures     = []
     st.session_state.show_analytics  = False
     st.session_state.last_prediction = {}
+    st.session_state.live_results    = None
     st.session_state.current_mode    = mode
 
 
 # ==========================================================
-# SECTION 16 - SINGLE PEPTIDE PREDICTION MODE (UNCHANGED)
+# SECTION 16 - SINGLE PEPTIDE PREDICTION MODE
 # ==========================================================
 
 if mode == "Single Peptide Prediction":
 
     st.markdown("## 🔬 Single Peptide Prediction")
-    seq = st.text_input(
+
+    # ── Live input with real-time preview ─────────────────────────────────
+    seq_raw = st.text_input(
         "Enter peptide sequence (FASTA single-letter code)",
-        help="Example: AGLWFK",
+        help="Accepts 1 or more amino acids. Example: A, AGLWFK, ACDEFGHIKLM",
+        placeholder="Type your sequence here…",
+        key="single_seq_input",
     )
+    seq_clean = clean_sequence(seq_raw)
 
-    if st.button("Run Prediction"):
-        st.session_state.pdf_figures = []
-        seq = clean_sequence(seq)
+    # Sequence counter
+    if seq_raw:
+        valid   = len(seq_clean)
+        invalid = len(seq_raw.replace(" ","").replace("\n","")) - valid
+        badge_color = "#12b886" if valid > 0 else "#c0392b"
+        inv_note = f" &nbsp; <span style='color:#c0392b;'>({invalid} invalid removed)</span>" if invalid else ""
+        st.markdown(
+            f'<div class="seq-counter">'
+            f'<span style="color:{badge_color};font-weight:800;">{valid}</span> valid amino acids'
+            f'{inv_note}</div>',
+            unsafe_allow_html=True,
+        )
 
-        if len(seq) < 2:
-            st.error("Peptide sequence must be at least 2 amino acids long.")
-        else:
-            Xp    = pd.DataFrame([model_features(seq)])
-            taste = le_taste.inverse_transform(taste_model.predict(Xp))[0]
-            sol   = le_sol.inverse_transform(sol_model.predict(Xp))[0]
-            dock  = dock_model.predict(Xp)[0]
+    # Live dynamic preview — updates on every keystroke
+    if seq_clean:
+        render_live_preview(seq_clean)
 
-            st.session_state.last_prediction = {
-                "Sequence":                 seq,
-                "Predicted taste":          taste,
-                "Predicted solubility":     sol,
-                "Docking score (kcal/mol)": round(dock, 3),
-            }
-            st.session_state.show_analytics = True
+    # ── Quick Predict — fires on every change without button click ─────────
+    if seq_clean and len(seq_clean) >= 1:
+        Xp    = pd.DataFrame([model_features(seq_clean)])
+        taste = le_taste.inverse_transform(taste_model.predict(Xp))[0]
+        sol   = le_sol.inverse_transform(sol_model.predict(Xp))[0]
+        dock  = dock_model.predict(Xp)[0]
+        emoji = taste_emoji(taste)
 
-            st.markdown(f"""
-            <div class="card">
-                <div class="metric-label">Taste</div>
-                <div class="metric-value">{taste}</div>
-                <div class="metric-label">Solubility</div>
-                <div class="metric-value">{sol}</div>
-                <div class="metric-label">Docking Score</div>
-                <div class="metric-value">{dock:.3f} kcal/mol</div>
+        # Solubility colour
+        sol_color = "#12b886" if "soluble" in sol.lower() else "#e67e22"
+        dock_color = "#12b886" if dock < -6 else ("#f39c12" if dock < -4 else "#c0392b")
+
+        st.markdown(f"""
+        <div class="card">
+          <div style="font-size:12px;font-weight:700;opacity:0.5;text-transform:uppercase;
+                      letter-spacing:0.08em;margin-bottom:16px;">
+            <span class="live-indicator"></span>Prediction Results
+          </div>
+          <div style="display:flex;gap:40px;flex-wrap:wrap;align-items:flex-start;">
+            <div>
+              <div class="metric-label" style="margin-top:0;">Taste</div>
+              <div class="metric-value">{emoji} {taste}</div>
             </div>
-            """, unsafe_allow_html=True)
+            <div>
+              <div class="metric-label" style="margin-top:0;">Solubility</div>
+              <div class="metric-value" style="color:{sol_color} !important;">{sol}</div>
+            </div>
+            <div>
+              <div class="metric-label" style="margin-top:0;">Docking Score</div>
+              <div class="metric-value" style="color:{dock_color} !important;">{dock:.3f} kcal/mol</div>
+              <div style="font-size:11px;opacity:0.6;">{'Strong binder' if dock<-6 else 'Moderate' if dock<-4 else 'Weak binder'}</div>
+            </div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
 
+        st.session_state.last_prediction = {
+            "Sequence":                 seq_clean,
+            "Predicted taste":          taste,
+            "Predicted solubility":     sol,
+            "Docking score (kcal/mol)": round(dock, 3),
+        }
+        st.session_state.show_analytics = True
+
+    # ── Deep analysis button ───────────────────────────────────────────────
+    st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
+    run_deep = st.button("🔬 Run Full Analysis (3D Structure + Plots)", type="primary")
+
+    if run_deep:
+        st.session_state.pdf_figures = []
+        seq = seq_clean
+
+        if len(seq) < 1:
+            st.error("Please enter at least 1 amino acid.")
+        else:
+            # Physicochemical Properties
             st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
             st.markdown("### 📌 Physicochemical Properties")
-            for k, v in physicochemical_features(seq).items():
-                st.write(f"**{k}**: {v}")
+            phys = physicochemical_features(seq)
+            cols = st.columns(min(len(phys), 4))
+            for i, (k, v) in enumerate(phys.items()):
+                cols[i % len(cols)].metric(k, v)
 
             st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
             st.markdown("### 🧪 Amino Acid Composition")
-            for k, v in composition_features(seq).items():
-                st.write(f"**{k}**: {v}")
+            comp = composition_features(seq)
+            comp_cols = st.columns(len(comp))
+            for i, (k, v) in enumerate(comp.items()):
+                comp_cols[i].metric(k, f"{v}%")
+                # mini bar
+                comp_cols[i].markdown(
+                    f'<div class="progress-bar-wrap"><div class="progress-bar-fill" '
+                    f'style="width:{v}%;background:#1a8fd1;"></div></div>',
+                    unsafe_allow_html=True
+                )
 
+            # 3D Structure via ESMFold API
             st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
-            st.markdown("## 🧬 Predicted 3D Peptide Structure")
-
-            # ESMFold structure prediction (replaces PeptideBuilder)
+            st.markdown("## 🧬 ESMFold — Predicted 3D Structure")
             pdb_text = build_peptide_pdb(seq)
             st.session_state.pdb_text = pdb_text
 
@@ -1503,20 +1428,19 @@ if mode == "Single Peptide Prediction":
 
                 rmsd_val = ca_rmsd(pdb_text)
                 if rmsd_val is not None:
-                    st.success(f"Cα RMSD: {rmsd_val:.3f} Å")
+                    st.success(f"Cα RMSD from reference: **{rmsd_val:.3f} Å**")
 
                 render_structural_analysis(pdb_text, prefix="single_", seq=seq)
 
 
 # ==========================================================
-# SECTION 17 - BATCH PEPTIDE PREDICTION MODE (UNCHANGED)
+# SECTION 17 - BATCH PEPTIDE PREDICTION MODE
 # ==========================================================
 
 elif mode == "Batch Peptide Prediction":
 
     st.markdown("## 📦 Batch Peptide Prediction")
-    batch_file = st.file_uploader(
-        "Upload CSV file with a column named 'peptide'", type=["csv"])
+    batch_file = st.file_uploader("Upload CSV file with a column named 'peptide'", type=["csv"])
 
     if batch_file is not None:
         batch_df = pd.read_csv(batch_file)
@@ -1524,14 +1448,51 @@ elif mode == "Batch Peptide Prediction":
             st.error("CSV must contain a column named 'peptide'")
         else:
             batch_df["peptide"] = batch_df["peptide"].apply(clean_sequence)
-            batch_df = batch_df[batch_df["peptide"].str.len() >= 2].reset_index(drop=True)
-            X_batch  = build_feature_table(batch_df["peptide"])
-            batch_df["Predicted Taste"]         = le_taste.inverse_transform(taste_model.predict(X_batch))
-            batch_df["Predicted Solubility"]    = le_sol.inverse_transform(sol_model.predict(X_batch))
-            batch_df["Predicted Docking Score"] = dock_model.predict(X_batch)
+            batch_df = batch_df[batch_df["peptide"].str.len() >= 1].reset_index(drop=True)
+
+            # Progress bar for batch
+            progress = st.progress(0, text="Processing peptides…")
+            total    = len(batch_df)
+            chunk    = max(1, total // 20)
+
+            tastes, sols, docks = [], [], []
+            for i, row in batch_df.iterrows():
+                Xr = pd.DataFrame([model_features(row["peptide"])])
+                tastes.append(le_taste.inverse_transform(taste_model.predict(Xr))[0])
+                sols.append(le_sol.inverse_transform(sol_model.predict(Xr))[0])
+                docks.append(round(dock_model.predict(Xr)[0], 3))
+                if i % chunk == 0:
+                    progress.progress(min(int((i+1)/total*100), 100),
+                                      text=f"Processing {i+1}/{total} peptides…")
+
+            progress.progress(100, text="Done!")
+            batch_df["Predicted Taste"]         = tastes
+            batch_df["Predicted Solubility"]    = sols
+            batch_df["Predicted Docking Score"] = docks
+
+            # Dynamic summary metrics
+            st.markdown("### 📊 Batch Summary")
+            s1, s2, s3, s4 = st.columns(4)
+            s1.metric("Total Peptides", total)
+            s2.metric("Unique Tastes", batch_df["Predicted Taste"].nunique())
+            s3.metric("Soluble (%)",
+                      f"{100*batch_df['Predicted Solubility'].str.contains('oluble',case=False,na=False).mean():.1f}%")
+            s4.metric("Avg Docking", f"{batch_df['Predicted Docking Score'].mean():.2f} kcal/mol")
+
+            # Taste distribution chart (dynamic)
+            fig_b, ax_b = plt.subplots(figsize=(8, 3))
+            C = get_plot_colors()
+            apply_plot_style(fig_b, [ax_b])
+            tc = batch_df["Predicted Taste"].value_counts()
+            colors_b = plt.cm.get_cmap("tab20", len(tc))(np.linspace(0, 1, len(tc)))
+            ax_b.barh(tc.index, tc.values, color=colors_b)
+            ax_b.set_xlabel("Count", color=C["text"])
+            ax_b.set_title("Batch Taste Distribution", color=C["text"], fontweight="bold")
+            st.pyplot(fig_b)
+            plt.close(fig_b)
 
             st.markdown("### ✅ Batch Results")
-            st.dataframe(batch_df)
+            st.dataframe(batch_df, use_container_width=True)
             st.download_button(
                 "⬇️ Download Batch Predictions",
                 batch_df.to_csv(index=False),
@@ -1541,7 +1502,7 @@ elif mode == "Batch Peptide Prediction":
 
 
 # ==========================================================
-# SECTION 18 - PDB UPLOAD & STRUCTURAL ANALYSIS MODE (UNCHANGED)
+# SECTION 18 - PDB UPLOAD & STRUCTURAL ANALYSIS MODE
 # ==========================================================
 
 elif mode == "PDB Upload & Structural Analysis":
@@ -1554,18 +1515,26 @@ elif mode == "PDB Upload & Structural Analysis":
         st.session_state.pdb_text       = pdb_text
         st.session_state.show_analytics = True
 
+        # Quick file stats
+        n_atoms   = sum(1 for l in pdb_text.splitlines() if l.startswith("ATOM"))
+        n_residues = len({l[22:26].strip() for l in pdb_text.splitlines() if l.startswith("ATOM")})
+        c1, c2, c3 = st.columns(3)
+        c1.metric("ATOM records", n_atoms)
+        c2.metric("Residues", n_residues)
+        c3.metric("File size", f"{len(pdb_text)//1024} KB")
+
         st.markdown("### 🧬 3D Structure Viewer")
         st.components.v1.html(show_structure(pdb_text)._make_html(), height=520)
 
         rmsd_val = ca_rmsd(pdb_text)
         if rmsd_val is not None:
-            st.success(f"Cα RMSD: {rmsd_val:.3f} Å")
+            st.success(f"Cα RMSD: **{rmsd_val:.3f} Å**")
 
         render_structural_analysis(pdb_text, prefix="pdb_")
 
 
 # ==========================================================
-# SECTION 19 - MODEL & DATASET ANALYTICS (UNCHANGED)
+# SECTION 19 - MODEL & DATASET ANALYTICS
 # ==========================================================
 
 if st.session_state.show_analytics:
@@ -1574,11 +1543,15 @@ if st.session_state.show_analytics:
 
     with st.expander("📊 Model Performance & Dataset Analytics", expanded=False):
 
-        st.markdown("### 📈 Model Performance Metrics")
-        for k, v in metrics.items():
-            st.write(f"**{k}**: {round(v, 4)}")
+        st.markdown("### 📈 Model Performance")
+        mc = st.columns(3)
+        mc[0].metric("Taste Accuracy",      f"{metrics['Taste accuracy']*100:.1f}%")
+        mc[0].metric("Taste F1",            f"{metrics['Taste F1']:.3f}")
+        mc[1].metric("Solubility Accuracy", f"{metrics['Solubility accuracy']*100:.1f}%")
+        mc[1].metric("Solubility F1",       f"{metrics['Solubility F1']:.3f}")
+        mc[2].metric("Docking R²",          f"{metrics['Docking R2']:.3f}")
+        mc[2].metric("Docking RMSE",        f"{metrics['Docking RMSE']:.3f} kcal/mol")
 
-        # Dataset Distributions
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 📊 Dataset Distributions")
         fig_dist = plot_distributions(df_all)
@@ -1587,9 +1560,8 @@ if st.session_state.show_analytics:
         plt.close(fig_dist)
         show_caption(caption_distributions(df_all))
 
-        # PCA
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
-        st.markdown("### 🔹 PCA: Peptide Feature Space (coloured by taste)")
+        st.markdown("### 🔹 PCA: Peptide Feature Space")
         fig_pca, pca_model = plot_pca(
             X_all, le_taste.transform(df_all["taste"]), le_taste.classes_,
             title="PCA — Peptide Feature Space (coloured by taste class)",
@@ -1599,33 +1571,26 @@ if st.session_state.show_analytics:
         plt.close(fig_pca)
         show_caption(caption_pca(pca_model, le_taste.classes_))
 
-        # Confusion Matrix — Taste
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
-        st.markdown("### 🔹 Confusion Matrix — Taste (test set)")
+        st.markdown("### 🔹 Confusion Matrix — Taste")
         taste_preds  = taste_model.predict(X_test)
-        fig_cm_taste = plot_confusion(
-            yt_test, taste_preds,
-            le_taste.classes_, title="Taste Confusion Matrix", cmap="Blues",
-        )
+        fig_cm_taste = plot_confusion(yt_test, taste_preds, le_taste.classes_,
+                                      title="Taste Confusion Matrix", cmap="Blues")
         save_fig(fig_cm_taste, "confusion_taste.png")
         st.pyplot(fig_cm_taste)
         plt.close(fig_cm_taste)
         show_caption(caption_confusion_taste(yt_test, taste_preds, le_taste.classes_))
 
-        # Confusion Matrix — Solubility
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
-        st.markdown("### 🔹 Confusion Matrix — Solubility (test set)")
+        st.markdown("### 🔹 Confusion Matrix — Solubility")
         sol_preds  = sol_model.predict(X_test)
-        fig_cm_sol = plot_confusion(
-            ys_test, sol_preds,
-            le_sol.classes_, title="Solubility Confusion Matrix", cmap="Greens",
-        )
+        fig_cm_sol = plot_confusion(ys_test, sol_preds, le_sol.classes_,
+                                    title="Solubility Confusion Matrix", cmap="Greens")
         save_fig(fig_cm_sol, "confusion_solubility.png")
         st.pyplot(fig_cm_sol)
         plt.close(fig_cm_sol)
         show_caption(caption_confusion_sol(ys_test, sol_preds, le_sol.classes_))
 
-        # Feature Importance
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 🔹 Feature Importance — Taste Model")
         fig_imp = plot_feature_importance(taste_model, X_all.columns, top_n=20)
@@ -1634,9 +1599,8 @@ if st.session_state.show_analytics:
         plt.close(fig_imp)
         show_caption(caption_feature_importance(taste_model, X_all.columns, top_n=20))
 
-        # Docking Scatter
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
-        st.markdown("### 🔹 Docking Score: True vs Predicted (test set)")
+        st.markdown("### 🔹 Docking Score: True vs Predicted")
         dock_preds = dock_model.predict(X_test)
         fig_dock   = plot_docking(yd_test, dock_preds)
         save_fig(fig_dock, "docking_scatter.png")
@@ -1646,11 +1610,10 @@ if st.session_state.show_analytics:
 
 
 # ==========================================================
-# SECTION 20 - PDF DOWNLOAD (UNCHANGED)
+# SECTION 20 - PDF DOWNLOAD
 # ==========================================================
 
 if st.session_state.show_analytics and len(st.session_state.pdf_figures) > 0:
-
     st.markdown("## 📄 Download Complete PDF Report")
     pdf_path = generate_pdf(
         metrics, st.session_state.last_prediction, st.session_state.pdf_figures)
@@ -1663,13 +1626,13 @@ if st.session_state.show_analytics and len(st.session_state.pdf_figures) > 0:
 
 
 # ==========================================================
-# SECTION 21 - FOOTER (UNCHANGED)
+# SECTION 21 - FOOTER
 # ==========================================================
 
 st.markdown(f"""
 <div class="footer">
 &copy; {date.today().year} &nbsp; <b>PepTastePredictor</b><br>
-An AI + Structural Bioinformatics platform for peptide analysis<br>
-ESMFold-powered 3D structure prediction &nbsp;|&nbsp; For academic, educational, and research use
+AI + Structural Bioinformatics platform for peptide analysis<br>
+ESMFold API &nbsp;|&nbsp; For academic, educational, and research use
 </div>
 """, unsafe_allow_html=True)
