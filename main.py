@@ -1835,33 +1835,43 @@ def caption_aa_composition_v2(aa_stats: dict, seq: str) -> str:
         f"<em>{aa_stats['bio_note']}</em>"
     )
 
-
 def caption_plddt_v2(plddt_stats: dict, seq: str = "") -> str:
     if not plddt_stats:
-        return "pLDDT data not available for this structure (B-factor column does not contain AlphaFold confidence scores)."
+        return (
+            "pLDDT data not available for this structure "
+            "(B-factor column does not contain AlphaFold confidence scores)."
+        )
+
     lbl = plddt_stats["label"]
     col = plddt_stats["color"]
-    n_flex = sum(r[1]-r[0]+1 for r in plddt_stats["flexible_regions"])
-    flex_note = (
-        f"<strong>{n_flex} residues</strong> in {len(plddt_stats['flexible_regions'])} flexible region(s)."
-        if plddt_stats["flexible_regions"] else "No extended flexible regions detected."
+
+    n_flex = sum(
+        r[1] - r[0] + 1
+        for r in plddt_stats["flexible_regions"]
     )
+
+    flex_note = (
+        f"<strong>{n_flex} residues</strong> in "
+        f"{len(plddt_stats['flexible_regions'])} flexible region(s)."
+        if plddt_stats["flexible_regions"]
+        else "No extended flexible regions detected."
+    )
+
     hotspot_note = (
         f"<strong>{len(plddt_stats['hotspot_indices'])} confidence hotspot(s)</strong> "
         f"(pLDDT ≥ {plddt_stats['hotspot_threshold']:.0f})."
-        if plddt_stats["hotspot_indices"] else "No high-confidence hotspots above threshold."
+        if plddt_stats["hotspot_indices"]
+        else "No high-confidence hotspots above threshold."
     )
-    return (
-        f"Per-residue pLDDT confidence profile"
-        residue_count_text = ""
 
-        if seq:
-            residue_count_text = f" ({len(seq)} residues)"
-            caption = (
-                f"Mean pLDDT: {plddt_stats['mean']}"
-                f"{residue_count_text}.<br><br>"
-            )
-        f"<strong>Mean pLDDT:</strong> <span style='color:{col}'>{plddt_stats['mean']:.1f} — {lbl}</span> | "
+    residue_count_text = ""
+    if seq:
+        residue_count_text = f" ({len(seq)} residues)"
+
+    return (
+        f"Per-residue pLDDT confidence profile{residue_count_text}.<br><br>"
+        f"<strong>Mean pLDDT:</strong> "
+        f"<span style='color:{col}'>{plddt_stats['mean']:.1f} — {lbl}</span> | "
         f"<strong>Median:</strong> {plddt_stats['median']:.1f} | "
         f"<strong>Range:</strong> {plddt_stats['min']:.1f}–{plddt_stats['max']:.1f} | "
         f"<strong>σ:</strong> {plddt_stats['std']:.1f}<br>"
@@ -1871,8 +1881,6 @@ def caption_plddt_v2(plddt_stats: dict, seq: str = "") -> str:
         f"<strong>Low (&lt;50):</strong> {plddt_stats['low']}<br><br>"
         f"{hotspot_note} {flex_note}"
     )
-
-
 def caption_rg_v2(rg_stats: dict, seq: str = "") -> str:
     if rg_stats.get("rg") is None:
         return "Radius of gyration could not be computed."
