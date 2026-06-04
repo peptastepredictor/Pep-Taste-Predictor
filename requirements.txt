@@ -8,3 +8,4 @@ biopython>=1.83
 py3Dmol>=2.0.4
 openpyxl>=3.1.2
 reportlab>=4.1.0
+PeptideBuilder
