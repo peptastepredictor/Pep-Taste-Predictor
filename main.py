@@ -1,7 +1,7 @@
 # ==========================================================
 # PepTastePredictor — app.py
 # A complete end-to-end peptide analysis platform
-# Light + Dark Mode Compatible | ESMFold API | Dynamic UI
+# Light + Dark Mode Compatible | PeptideBuilder | Dynamic UI
 # ==========================================================
 
 # ==========================================================
@@ -11,7 +11,6 @@
 import os
 import time
 import tempfile
-import requests
 from datetime import date
 from collections import Counter
 
@@ -68,7 +67,10 @@ KD_SCALE = {
     "S": -0.8, "T": -0.7, "V": 4.2,  "W": -0.9, "Y": -1.3,
 }
 
-ESMFOLD_API_URL = "https://api.esmatlas.com/foldSequence/v1/pdb/"
+# Structure prediction mode: "PeptideBuilder" is the only supported local mode.
+# Set USE_COLABFOLD = True only if you want to manually upload a ColabFold PDB.
+STRUCTURE_MODE  = "PeptideBuilder"
+USE_COLABFOLD   = False
 
 # Taste emoji map
 TASTE_EMOJI = {
@@ -234,27 +236,6 @@ div[data-testid="stAlert"] span { color: inherit !important; }
 
 .section-gap { margin-top: 40px; margin-bottom: 6px; }
 
-.plddt-bar {
-    height: 14px;
-    border-radius: 7px;
-    margin: 8px 0 4px 0;
-    transition: width 1s ease;
-}
-
-.esm-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 14px;
-    border-radius: 20px;
-    font-size: 13px;
-    font-weight: 600;
-    background: rgba(18,184,134,0.12);
-    border: 1px solid rgba(18,184,134,0.35);
-    color: #12b886 !important;
-    margin-bottom: 16px;
-}
-
 .footer {
     text-align: center;
     font-size: 14px !important;
@@ -300,8 +281,13 @@ st.sidebar.write("• Batch screening")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**🔬 Structure Engine**")
-st.sidebar.markdown('<div class="esm-badge">⚡ ESMFold API</div>', unsafe_allow_html=True)
-st.sidebar.caption("No GPU required — uses Meta's ESMFold cloud API for real protein folding.")
+st.sidebar.markdown(
+    '<div style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;'
+    'border-radius:20px;font-size:13px;font-weight:600;background:rgba(18,184,134,0.12);'
+    'border:1px solid rgba(18,184,134,0.35);color:#12b886;">⚙️ PeptideBuilder</div>',
+    unsafe_allow_html=True,
+)
+st.sidebar.caption("Local structure generation — works fully offline, no GPU required.")
 st.sidebar.info("For academic & educational use only")
 
 
@@ -310,14 +296,14 @@ st.sidebar.info("For academic & educational use only")
 # ==========================================================
 
 defaults = {
-    "initialized": True,
-    "pdb_text": None,
-    "last_prediction": {},
+    "initialized":    True,
+    "pdb_text":       None,
+    "last_prediction":{},
     "show_analytics": False,
-    "pdf_figures": [],
-    "live_seq": "",
-    "live_results": None,
-    "current_mode": None,
+    "pdf_figures":    [],
+    "live_seq":       "",
+    "live_results":   None,
+    "current_mode":   None,
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -335,14 +321,26 @@ def save_fig(fig, filename):
 
 
 def clean_sequence(seq):
+    """Strip whitespace/newlines, uppercase, keep only valid amino acid letters."""
     if not isinstance(seq, str):
         return ""
     seq = seq.upper().replace(" ", "").replace("\n", "").replace("\t", "")
     return "".join(a for a in seq if a in AA)
 
 
+def validate_sequence(seq: str) -> tuple[bool, str]:
+    """Return (is_valid, message). Accepts 1–100 aa."""
+    if not seq:
+        return False, "Sequence is empty."
+    if len(seq) > 100:
+        return False, f"Sequence too long ({len(seq)} aa). Maximum is 100 aa."
+    invalid = [c for c in seq.upper() if c not in AA]
+    if invalid:
+        return False, f"Invalid characters detected: {set(invalid)}"
+    return True, ""
+
+
 def model_features(seq):
-    # For single amino acid, use composition-only features (skip BioPython which needs ≥2)
     L = len(seq)
     features = {"length": L}
 
@@ -361,7 +359,6 @@ def model_features(seq):
             features.update({"mw": 0, "pI": 7.0, "aromaticity": 0,
                               "instability": 0, "gravy": 0, "charge": 0})
     else:
-        # Single AA — compute manually
         features.update({
             "mw":          111.0,
             "pI":          7.0,
@@ -413,10 +410,10 @@ def physicochemical_features(seq):
         except Exception:
             pass
     return {
-        "Length":                L,
-        "GRAVY":                 round(KD_SCALE.get(seq, 0.0), 3),
-        "Aromaticity":           1.0 if seq in "FWY" else 0.0,
-        "Note":                  "Extended analysis requires ≥2 amino acids",
+        "Length":      L,
+        "GRAVY":       round(KD_SCALE.get(seq, 0.0), 3),
+        "Aromaticity": 1.0 if seq in "FWY" else 0.0,
+        "Note":        "Extended analysis requires ≥2 amino acids",
     }
 
 
@@ -479,7 +476,7 @@ def render_live_preview(seq: str):
         return
     L = len(seq)
     gv = gravy_score(seq)
-    c = Counter(seq)
+    c  = Counter(seq)
 
     hydro_pct  = 100 * sum(c[a] for a in "AILMFWV") / L
     charge_pct = 100 * sum(c[a] for a in "DEKRH") / L
@@ -738,89 +735,100 @@ def apply_plot_style(fig, axes_list):
 
 
 # ==========================================================
-# SECTION 7 - ESMFOLD API STRUCTURE PREDICTION
-# No local torch/transformers needed — uses Meta's public API
+# SECTION 7 - STRUCTURE PREDICTION (LOCAL PEPTIDEBUILDER)
+# Works fully offline. Supports 1–100 aa. No external API.
 # ==========================================================
 
 def build_peptide_pdb(seq: str) -> str:
     """
-    Predict 3D structure via ESMFold public REST API.
-    Works on Streamlit Cloud with zero extra installs.
-    Falls back to PeptideBuilder if API is unreachable.
+    Generate a 3D extended-chain structure using PeptideBuilder.
+
+    Supports sequences from 1 to 100 amino acids.
+    All 20 standard amino acids are supported.
+    Returns PDB file content as a string, or "" on failure.
 
     Args:
-        seq: Cleaned amino acid sequence (any length ≥ 1).
+        seq: Cleaned, validated amino acid sequence.
 
     Returns:
-        pdb_text (str): PDB file content.
+        pdb_text (str): PDB file content, or "" if generation failed.
     """
+    # Validate before attempting to build
+    is_valid, msg = validate_sequence(seq)
+    if not is_valid:
+        st.error(f"Structure generation skipped — {msg}")
+        return ""
 
-    # ESMFold API requires ≥ 1 residue; pad single AA to triplet for folding
-    fold_seq = seq if len(seq) >= 2 else seq * 3
+    # PeptideBuilder needs ≥2 residues to initialise a chain.
+    # For a single amino acid we pad with Glycine, then trim afterwards.
+    single_aa_mode = len(seq) == 1
+    build_seq = seq if len(seq) >= 2 else seq + "G"
 
-    with st.spinner("🔬 ESMFold API: predicting 3D structure…"):
+    with st.spinner("⚙️ Generating 3D structure locally…"):
         try:
-            response = requests.post(
-                ESMFOLD_API_URL,
-                data=fold_seq,
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                timeout=120,
-            )
-            response.raise_for_status()
-            pdb_text = response.text
+            import PeptideBuilder
+            from PeptideBuilder import Geometry
 
-            # If original was single AA, trim to first residue only
-            if len(seq) == 1:
+            # Build chain residue-by-residue
+            structure = PeptideBuilder.initialize_res(build_seq[0])
+            for aa in build_seq[1:]:
+                geo = Geometry.geometry(aa)
+                PeptideBuilder.add_residue(structure, geo)
+
+            # Write to temp file then read back
+            pdb_path = "predicted_peptide.pdb"
+            io = PDBIO()
+            io.set_structure(structure)
+            io.save(pdb_path)
+
+            with open(pdb_path, "r") as f:
+                pdb_text = f.read()
+
+            # For single-AA input, keep only the first residue's ATOM lines
+            if single_aa_mode:
                 pdb_text = _trim_pdb_to_n_residues(pdb_text, 1)
+                # Re-save trimmed version
+                with open(pdb_path, "w") as f:
+                    f.write(pdb_text)
 
-            # Save to disk
-            with open("predicted_peptide.pdb", "w") as f:
-                f.write(pdb_text)
+            if not pdb_text.strip():
+                st.error("Structure generation produced an empty PDB file.")
+                return ""
 
-            # Extract and display pLDDT
-            mean_plddt = _extract_plddt(pdb_text)
-            if mean_plddt is not None:
-                _display_plddt(mean_plddt)
-
-            st.markdown('<div class="esm-badge">✅ ESMFold API — structure predicted</div>',
-                        unsafe_allow_html=True)
+            st.success("✅ Structure generated locally using PeptideBuilder.")
+            st.info(
+                "ℹ️ This is an extended-chain (idealised geometry) model, "
+                "not a folded prediction. It is suitable for geometry-based "
+                "analysis (Ramachandran, distance map, visualisation)."
+            )
             return pdb_text
 
-        except requests.exceptions.Timeout:
-            st.warning("⏱️ ESMFold API timed out (>120s). Using PeptideBuilder fallback.")
-        except requests.exceptions.ConnectionError:
-            st.warning("🌐 ESMFold API unreachable (offline?). Using PeptideBuilder fallback.")
-        except requests.exceptions.HTTPError as e:
-            st.warning(f"⚠️ ESMFold API error ({e}). Using PeptideBuilder fallback.")
+        except ImportError:
+            st.error(
+                "PeptideBuilder is not installed. "
+                "Run `pip install PeptideBuilder` and restart the app."
+            )
+            return ""
+        except KeyError as e:
+            st.error(
+                f"PeptideBuilder does not support amino acid '{e}'. "
+                "Please check your sequence and try again."
+            )
+            return ""
         except Exception as e:
-            st.warning(f"⚠️ Unexpected error: {e}. Using PeptideBuilder fallback.")
-
-    return _fallback_peptidebuilder(seq)
-
-
-def _extract_plddt(pdb_text: str) -> float | None:
-    """
-    Extract mean pLDDT from PDB B-factor column.
-    ESMFold stores pLDDT as B-factors in the PDB output.
-    """
-    scores = []
-    for line in pdb_text.splitlines():
-        if line.startswith("ATOM") and len(line) >= 66:
-            try:
-                scores.append(float(line[60:66].strip()))
-            except ValueError:
-                pass
-    return float(np.mean(scores)) if scores else None
+            st.error(f"Structure generation failed: {e}")
+            return ""
 
 
 def _trim_pdb_to_n_residues(pdb_text: str, n: int) -> str:
-    """Keep only ATOM records for the first n residues."""
-    lines = []
-    seen_res = set()
+    """Keep only ATOM records belonging to the first n residues."""
+    lines    = []
+    seen_res = []
     for line in pdb_text.splitlines():
         if line.startswith("ATOM"):
             res_id = (line[21], line[22:26].strip())
-            seen_res.add(res_id)
+            if res_id not in seen_res:
+                seen_res.append(res_id)
             if len(seen_res) <= n:
                 lines.append(line)
         elif line.startswith("END"):
@@ -828,64 +836,50 @@ def _trim_pdb_to_n_residues(pdb_text: str, n: int) -> str:
     return "\n".join(lines)
 
 
-def _display_plddt(mean_plddt: float):
-    """Colour-coded pLDDT confidence badge with animated bar."""
-    if mean_plddt >= 90:
-        colour, label = "#12b886", "Very high confidence"
-    elif mean_plddt >= 70:
-        colour, label = "#1a8fd1", "Confident"
-    elif mean_plddt >= 50:
-        colour, label = "#f39c12", "Low confidence"
-    else:
-        colour, label = "#c0392b", "Very low confidence"
+# ==========================================================
+# SECTION 7B - OPTIONAL COLABFOLD UPLOAD SUPPORT
+# USE_COLABFOLD must be True (set at top of file) to activate.
+# No ColabFold server is called; user uploads a pre-generated PDB.
+# ==========================================================
 
-    bar_width = min(int(mean_plddt), 100)
-    st.markdown(f"""
-    <div style="border-left:6px solid {colour};padding:14px 20px;border-radius:0 12px 12px 0;
-                background:{colour}12;margin:12px 0 20px 0;">
-      <div style="font-weight:700;font-size:15px;color:{colour};">
-        ESMFold pLDDT: {mean_plddt:.1f} / 100 &nbsp; — &nbsp; {label}
-      </div>
-      <div style="background:rgba(128,128,180,0.15);border-radius:6px;height:10px;margin:8px 0 4px 0;overflow:hidden;">
-        <div style="height:10px;border-radius:6px;width:{bar_width}%;background:{colour};transition:width 1s ease;"></div>
-      </div>
-      <div style="font-size:11px;opacity:0.65;margin-top:4px;">
-        ≥90 = very reliable &nbsp;|&nbsp; 70–90 = good &nbsp;|&nbsp; 50–70 = use with caution &nbsp;|&nbsp; &lt;50 = likely disordered
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-
-def _fallback_peptidebuilder(seq: str) -> str:
-    """Extended-chain fallback using PeptideBuilder (no AI folding)."""
-    try:
-        import PeptideBuilder
-        from PeptideBuilder import Geometry
-
-        build_seq = seq if len(seq) >= 2 else seq + "G"
-        structure = PeptideBuilder.initialize_res(build_seq[0])
-        for aa in build_seq[1:]:
-            PeptideBuilder.add_residue(structure, Geometry.geometry(aa))
-
-        io = PDBIO()
-        io.set_structure(structure)
-        io.save("predicted_peptide.pdb")
-        with open("predicted_peptide.pdb") as f:
-            pdb_text = f.read()
-
-        st.info("ℹ️ Extended-chain structure (PeptideBuilder fallback — no AI folding).")
-        return pdb_text
-
-    except Exception as e:
-        st.error(f"Both ESMFold API and PeptideBuilder failed: {e}")
+def colabfold_upload_section() -> str:
+    """
+    Display a ColabFold PDB upload widget and return PDB text if uploaded.
+    Returns "" when nothing is uploaded or USE_COLABFOLD is False.
+    """
+    if not USE_COLABFOLD:
         return ""
+
+    st.markdown(
+        "#### 📂 Upload ColabFold PDB (optional)\n"
+        "If you have already generated a structure with "
+        "[ColabFold](https://colab.research.google.com/github/sokrypton/ColabFold/blob/main/AlphaFold2.ipynb), "
+        "upload the `.pdb` file here to analyse it."
+    )
+    cf_file = st.file_uploader(
+        "Upload ColabFold PDB", type=["pdb"], key="colabfold_upload"
+    )
+    if cf_file is not None:
+        try:
+            pdb_text = cf_file.read().decode("utf-8")
+            if not pdb_text.strip():
+                st.error("Uploaded PDB file appears to be empty.")
+                return ""
+            n_atoms = sum(1 for l in pdb_text.splitlines() if l.startswith("ATOM"))
+            st.success(f"ColabFold PDB loaded — {n_atoms} ATOM records found.")
+            return pdb_text
+        except Exception as e:
+            st.error(f"Failed to read uploaded PDB: {e}")
+            return ""
+    return ""
 
 
 # ==========================================================
 # SECTION 8 - STRUCTURE ANALYSIS
 # ==========================================================
 
-def show_structure(pdb_text):
+def show_structure(pdb_text: str):
+    """Return a py3Dmol view object for the given PDB text."""
     view = py3Dmol.view(width=800, height=450)
     view.addModel(pdb_text, "pdb")
     view.setStyle({"cartoon": {"color": "spectrum"}})
@@ -893,31 +887,46 @@ def show_structure(pdb_text):
     return view
 
 
-def _write_temp_pdb(pdb_text):
+def _write_temp_pdb(pdb_text: str) -> str:
+    """Write PDB text to a temporary file and return its path."""
     tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".pdb", delete=False)
     tmp.write(pdb_text)
     tmp.close()
     return tmp.name
 
 
-def ramachandran(pdb_text):
+def ramachandran(pdb_text: str) -> list:
+    """Extract (phi, psi) angle pairs from PDB text. Returns [] on failure."""
+    if not pdb_text or not pdb_text.strip():
+        return []
     tmp_path = _write_temp_pdb(pdb_text)
     try:
-        structure = PDBParser(QUIET=True).get_structure("x", tmp_path)[0]
-        pts = []
-        for pp in PPBuilder().build_peptides(structure):
+        parser    = PDBParser(QUIET=True)
+        structure = parser.get_structure("x", tmp_path)
+        model     = structure[0]
+        pts       = []
+        for pp in PPBuilder().build_peptides(model):
             for phi, psi in pp.get_phi_psi_list():
-                if phi and psi:
+                if phi is not None and psi is not None:
                     pts.append((np.degrees(phi), np.degrees(psi)))
         return pts
+    except Exception:
+        return []
     finally:
-        os.unlink(tmp_path)
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
-def ca_distance_map(pdb_text):
+def ca_distance_map(pdb_text: str) -> np.ndarray:
+    """Compute pairwise Cα distance matrix. Returns zeros(1,1) on failure."""
+    if not pdb_text or not pdb_text.strip():
+        return np.zeros((1, 1))
     tmp_path = _write_temp_pdb(pdb_text)
     try:
-        structure = PDBParser(QUIET=True).get_structure("x", tmp_path)
+        parser    = PDBParser(QUIET=True)
+        structure = parser.get_structure("x", tmp_path)
         cas = [
             r["CA"].get_vector().get_array()
             for r in structure.get_residues()
@@ -928,14 +937,23 @@ def ca_distance_map(pdb_text):
         coords = np.array(cas)
         diff   = coords[:, None, :] - coords[None, :, :]
         return np.sqrt((diff ** 2).sum(-1))
+    except Exception:
+        return np.zeros((1, 1))
     finally:
-        os.unlink(tmp_path)
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
-def ca_rmsd(pdb_text):
+def ca_rmsd(pdb_text: str):
+    """Compute Cα RMSD from first residue. Returns None on failure."""
+    if not pdb_text or not pdb_text.strip():
+        return None
     tmp_path = _write_temp_pdb(pdb_text)
     try:
-        structure = PDBParser(QUIET=True).get_structure("x", tmp_path)
+        parser    = PDBParser(QUIET=True)
+        structure = parser.get_structure("x", tmp_path)
         cas = [
             r["CA"].get_vector()
             for r in structure.get_residues()
@@ -944,9 +962,14 @@ def ca_rmsd(pdb_text):
         if len(cas) < 2:
             return None
         ref = cas[0]
-        return np.sqrt(np.mean([(v - ref).norm() ** 2 for v in cas]))
+        return float(np.sqrt(np.mean([(v - ref).norm() ** 2 for v in cas])))
+    except Exception:
+        return None
     finally:
-        os.unlink(tmp_path)
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 # ==========================================================
@@ -955,10 +978,10 @@ def ca_rmsd(pdb_text):
 
 def plot_pca(X, y_labels, class_names, title="PCA"):
     C = get_plot_colors()
-    pca     = PCA(n_components=2)
-    coords  = pca.fit_transform(X)
-    var1    = pca.explained_variance_ratio_[0] * 100
-    var2    = pca.explained_variance_ratio_[1] * 100
+    pca    = PCA(n_components=2)
+    coords = pca.fit_transform(X)
+    var1   = pca.explained_variance_ratio_[0] * 100
+    var2   = pca.explained_variance_ratio_[1] * 100
     palette = plt.cm.get_cmap("tab20", len(class_names))
     fig, ax = plt.subplots(figsize=(9, 6))
     apply_plot_style(fig, [ax])
@@ -1142,12 +1165,17 @@ def plot_distance_map(dist_matrix, seq=""):
 # SECTION 10 - STRUCTURAL ANALYSIS HELPER
 # ==========================================================
 
-def render_structural_analysis(pdb_text, prefix="", seq=""):
+def render_structural_analysis(pdb_text: str, prefix: str = "", seq: str = ""):
+    """Render Ramachandran plot and Cα distance map for a given PDB."""
+    if not pdb_text or not pdb_text.strip():
+        st.warning("No PDB data available for structural analysis.")
+        return
+
     st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
     st.markdown("### 📐 Ramachandran Plot")
     phi_psi = ramachandran(pdb_text)
     if not phi_psi:
-        st.info("No phi/psi angles — peptide may be too short.")
+        st.info("No phi/psi angles computed — peptide may be too short (needs ≥3 residues).")
     fig_rama = plot_ramachandran(phi_psi)
     save_fig(fig_rama, f"{prefix}ramachandran.png")
     st.pyplot(fig_rama)
@@ -1156,12 +1184,15 @@ def render_structural_analysis(pdb_text, prefix="", seq=""):
 
     st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
     st.markdown("### 🗺️ Cα Distance Map")
-    dist_map = ca_distance_map(pdb_text)
-    fig_dist = plot_distance_map(dist_map, seq=seq)
-    save_fig(fig_dist, f"{prefix}ca_distance_map.png")
-    st.pyplot(fig_dist)
-    plt.close(fig_dist)
-    show_caption(caption_distance_map(dist_map, seq=seq))
+    try:
+        dist_map = ca_distance_map(pdb_text)
+        fig_dist = plot_distance_map(dist_map, seq=seq)
+        save_fig(fig_dist, f"{prefix}ca_distance_map.png")
+        st.pyplot(fig_dist)
+        plt.close(fig_dist)
+        show_caption(caption_distance_map(dist_map, seq=seq))
+    except Exception as e:
+        st.warning(f"Distance map could not be rendered: {e}")
 
 
 # ==========================================================
@@ -1177,7 +1208,7 @@ def train_models():
     df = pd.read_excel(DATASET_PATH)
     df.columns = df.columns.str.lower().str.strip()
     df["peptide"] = df["peptide"].apply(clean_sequence)
-    df = df[df["peptide"].str.len() >= 1].reset_index(drop=True)   # allow 1 AA
+    df = df[df["peptide"].str.len() >= 1].reset_index(drop=True)
     df = df[
         df["taste"].notna()
         & df["solubility"].notna()
@@ -1280,7 +1311,7 @@ st.markdown("""
 <p>
 An integrated machine learning &amp; structural bioinformatics platform for peptide
 taste, solubility, docking, and 3D structure analysis.
-Powered by <strong>Meta ESMFold API</strong> — real AI folding, no GPU required.
+Powered by <strong>Local Structure Generation and Structural Analysis</strong> — fully offline, no GPU required.
 </p>
 </div>
 """, unsafe_allow_html=True)
@@ -1316,7 +1347,7 @@ if mode == "Single Peptide Prediction":
     # ── Live input with real-time preview ─────────────────────────────────
     seq_raw = st.text_input(
         "Enter peptide sequence (FASTA single-letter code)",
-        help="Accepts 1 or more amino acids. Example: A, AGLWFK, ACDEFGHIKLM",
+        help="Accepts 1–100 amino acids. Example: A, AGLWFK, ACDEFGHIKLM",
         placeholder="Type your sequence here…",
         key="single_seq_input",
     )
@@ -1324,16 +1355,24 @@ if mode == "Single Peptide Prediction":
 
     # Sequence counter
     if seq_raw:
-        valid   = len(seq_clean)
-        invalid = len(seq_raw.replace(" ","").replace("\n","")) - valid
-        badge_color = "#12b886" if valid > 0 else "#c0392b"
-        inv_note = f" &nbsp; <span style='color:#c0392b;'>({invalid} invalid removed)</span>" if invalid else ""
+        valid        = len(seq_clean)
+        raw_stripped = seq_raw.replace(" ", "").replace("\n", "").replace("\t", "")
+        invalid      = len(raw_stripped) - valid
+        badge_color  = "#12b886" if valid > 0 else "#c0392b"
+        inv_note     = (
+            f" &nbsp; <span style='color:#c0392b;'>({invalid} invalid character(s) removed)</span>"
+            if invalid else ""
+        )
         st.markdown(
             f'<div class="seq-counter">'
             f'<span style="color:{badge_color};font-weight:800;">{valid}</span> valid amino acids'
             f'{inv_note}</div>',
             unsafe_allow_html=True,
         )
+
+        if valid > 100:
+            st.warning("⚠️ Sequence exceeds 100 aa. Only the first 100 will be used for structure generation.")
+            seq_clean = seq_clean[:100]
 
     # Live dynamic preview — updates on every keystroke
     if seq_clean:
@@ -1347,8 +1386,7 @@ if mode == "Single Peptide Prediction":
         dock  = dock_model.predict(Xp)[0]
         emoji = taste_emoji(taste)
 
-        # Solubility colour
-        sol_color = "#12b886" if "soluble" in sol.lower() else "#e67e22"
+        sol_color  = "#12b886" if "soluble" in sol.lower() else "#e67e22"
         dock_color = "#12b886" if dock < -6 else ("#f39c12" if dock < -4 else "#c0392b")
 
         st.markdown(f"""
@@ -1391,8 +1429,8 @@ if mode == "Single Peptide Prediction":
         st.session_state.pdf_figures = []
         seq = seq_clean
 
-        if len(seq) < 1:
-            st.error("Please enter at least 1 amino acid.")
+        if not seq:
+            st.error("Please enter at least 1 valid amino acid before running full analysis.")
         else:
             # Physicochemical Properties
             st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
@@ -1404,33 +1442,54 @@ if mode == "Single Peptide Prediction":
 
             st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
             st.markdown("### 🧪 Amino Acid Composition")
-            comp = composition_features(seq)
+            comp      = composition_features(seq)
             comp_cols = st.columns(len(comp))
             for i, (k, v) in enumerate(comp.items()):
                 comp_cols[i].metric(k, f"{v}%")
-                # mini bar
                 comp_cols[i].markdown(
                     f'<div class="progress-bar-wrap"><div class="progress-bar-fill" '
                     f'style="width:{v}%;background:#1a8fd1;"></div></div>',
-                    unsafe_allow_html=True
+                    unsafe_allow_html=True,
                 )
 
-            # 3D Structure via ESMFold API
+            # ── ColabFold upload (only shown when USE_COLABFOLD = True) ────
+            cf_pdb = colabfold_upload_section()
+
+            # ── Structure prediction ────────────────────────────────────────
             st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
-            st.markdown("## 🧬 ESMFold — Predicted 3D Structure")
-            pdb_text = build_peptide_pdb(seq)
+            st.markdown("## 🧬 Structure Prediction")
+
+            # Use ColabFold PDB if uploaded, otherwise generate locally
+            if cf_pdb:
+                pdb_text = cf_pdb
+                st.success("Using uploaded ColabFold structure for analysis.")
+            else:
+                pdb_text = build_peptide_pdb(seq)
+
             st.session_state.pdb_text = pdb_text
 
             if pdb_text:
-                st.download_button("⬇️ Download Predicted PDB", pdb_text,
-                                   file_name="predicted_peptide.pdb")
-                st.components.v1.html(show_structure(pdb_text)._make_html(), height=520)
+                st.download_button(
+                    "⬇️ Download PDB File",
+                    pdb_text,
+                    file_name="predicted_peptide.pdb",
+                )
+                try:
+                    st.components.v1.html(show_structure(pdb_text)._make_html(), height=520)
+                except Exception as e:
+                    st.warning(f"3D viewer could not render: {e}")
 
                 rmsd_val = ca_rmsd(pdb_text)
                 if rmsd_val is not None:
-                    st.success(f"Cα RMSD from reference: **{rmsd_val:.3f} Å**")
+                    st.success(f"Cα RMSD from first residue: **{rmsd_val:.3f} Å**")
 
                 render_structural_analysis(pdb_text, prefix="single_", seq=seq)
+            else:
+                st.error(
+                    "Structure generation failed. "
+                    "Prediction results above are still valid — "
+                    "only the 3D structure visualisation is unavailable."
+                )
 
 
 # ==========================================================
@@ -1445,60 +1504,72 @@ elif mode == "Batch Peptide Prediction":
     if batch_file is not None:
         batch_df = pd.read_csv(batch_file)
         if "peptide" not in batch_df.columns:
-            st.error("CSV must contain a column named 'peptide'")
+            st.error("CSV must contain a column named 'peptide'.")
         else:
             batch_df["peptide"] = batch_df["peptide"].apply(clean_sequence)
             batch_df = batch_df[batch_df["peptide"].str.len() >= 1].reset_index(drop=True)
 
-            # Progress bar for batch
-            progress = st.progress(0, text="Processing peptides…")
-            total    = len(batch_df)
-            chunk    = max(1, total // 20)
+            if batch_df.empty:
+                st.error("No valid peptide sequences found in the uploaded file.")
+            else:
+                progress = st.progress(0, text="Processing peptides…")
+                total    = len(batch_df)
+                chunk    = max(1, total // 20)
 
-            tastes, sols, docks = [], [], []
-            for i, row in batch_df.iterrows():
-                Xr = pd.DataFrame([model_features(row["peptide"])])
-                tastes.append(le_taste.inverse_transform(taste_model.predict(Xr))[0])
-                sols.append(le_sol.inverse_transform(sol_model.predict(Xr))[0])
-                docks.append(round(dock_model.predict(Xr)[0], 3))
-                if i % chunk == 0:
-                    progress.progress(min(int((i+1)/total*100), 100),
-                                      text=f"Processing {i+1}/{total} peptides…")
+                tastes, sols, docks = [], [], []
+                for i, row in batch_df.iterrows():
+                    try:
+                        Xr = pd.DataFrame([model_features(row["peptide"])])
+                        tastes.append(le_taste.inverse_transform(taste_model.predict(Xr))[0])
+                        sols.append(le_sol.inverse_transform(sol_model.predict(Xr))[0])
+                        docks.append(round(dock_model.predict(Xr)[0], 3))
+                    except Exception:
+                        tastes.append("Error")
+                        sols.append("Error")
+                        docks.append(None)
+                    if i % chunk == 0:
+                        progress.progress(min(int((i + 1) / total * 100), 100),
+                                          text=f"Processing {i+1}/{total} peptides…")
 
-            progress.progress(100, text="Done!")
-            batch_df["Predicted Taste"]         = tastes
-            batch_df["Predicted Solubility"]    = sols
-            batch_df["Predicted Docking Score"] = docks
+                progress.progress(100, text="Done!")
+                batch_df["Predicted Taste"]         = tastes
+                batch_df["Predicted Solubility"]    = sols
+                batch_df["Predicted Docking Score"] = docks
 
-            # Dynamic summary metrics
-            st.markdown("### 📊 Batch Summary")
-            s1, s2, s3, s4 = st.columns(4)
-            s1.metric("Total Peptides", total)
-            s2.metric("Unique Tastes", batch_df["Predicted Taste"].nunique())
-            s3.metric("Soluble (%)",
-                      f"{100*batch_df['Predicted Solubility'].str.contains('oluble',case=False,na=False).mean():.1f}%")
-            s4.metric("Avg Docking", f"{batch_df['Predicted Docking Score'].mean():.2f} kcal/mol")
+                st.markdown("### 📊 Batch Summary")
+                s1, s2, s3, s4 = st.columns(4)
+                s1.metric("Total Peptides", total)
+                s2.metric("Unique Tastes", batch_df["Predicted Taste"].nunique())
+                s3.metric(
+                    "Soluble (%)",
+                    f"{100 * batch_df['Predicted Solubility'].str.contains('oluble', case=False, na=False).mean():.1f}%",
+                )
+                valid_docks = batch_df["Predicted Docking Score"].dropna()
+                s4.metric(
+                    "Avg Docking",
+                    f"{valid_docks.mean():.2f} kcal/mol" if len(valid_docks) else "N/A",
+                )
 
-            # Taste distribution chart (dynamic)
-            fig_b, ax_b = plt.subplots(figsize=(8, 3))
-            C = get_plot_colors()
-            apply_plot_style(fig_b, [ax_b])
-            tc = batch_df["Predicted Taste"].value_counts()
-            colors_b = plt.cm.get_cmap("tab20", len(tc))(np.linspace(0, 1, len(tc)))
-            ax_b.barh(tc.index, tc.values, color=colors_b)
-            ax_b.set_xlabel("Count", color=C["text"])
-            ax_b.set_title("Batch Taste Distribution", color=C["text"], fontweight="bold")
-            st.pyplot(fig_b)
-            plt.close(fig_b)
+                # Taste distribution chart
+                fig_b, ax_b = plt.subplots(figsize=(8, 3))
+                C = get_plot_colors()
+                apply_plot_style(fig_b, [ax_b])
+                tc       = batch_df["Predicted Taste"].value_counts()
+                colors_b = plt.cm.get_cmap("tab20", len(tc))(np.linspace(0, 1, len(tc)))
+                ax_b.barh(tc.index, tc.values, color=colors_b)
+                ax_b.set_xlabel("Count", color=C["text"])
+                ax_b.set_title("Batch Taste Distribution", color=C["text"], fontweight="bold")
+                st.pyplot(fig_b)
+                plt.close(fig_b)
 
-            st.markdown("### ✅ Batch Results")
-            st.dataframe(batch_df, use_container_width=True)
-            st.download_button(
-                "⬇️ Download Batch Predictions",
-                batch_df.to_csv(index=False),
-                file_name="batch_predictions.csv",
-            )
-            st.session_state.show_analytics = True
+                st.markdown("### ✅ Batch Results")
+                st.dataframe(batch_df, use_container_width=True)
+                st.download_button(
+                    "⬇️ Download Batch Predictions",
+                    batch_df.to_csv(index=False),
+                    file_name="batch_predictions.csv",
+                )
+                st.session_state.show_analytics = True
 
 
 # ==========================================================
@@ -1511,26 +1582,36 @@ elif mode == "PDB Upload & Structural Analysis":
     uploaded_pdb = st.file_uploader("Upload a PDB file", type=["pdb"])
 
     if uploaded_pdb is not None:
-        pdb_text = uploaded_pdb.read().decode()
-        st.session_state.pdb_text       = pdb_text
-        st.session_state.show_analytics = True
+        try:
+            pdb_text = uploaded_pdb.read().decode("utf-8")
+        except Exception as e:
+            st.error(f"Could not read the uploaded PDB file: {e}")
+            pdb_text = ""
 
-        # Quick file stats
-        n_atoms   = sum(1 for l in pdb_text.splitlines() if l.startswith("ATOM"))
-        n_residues = len({l[22:26].strip() for l in pdb_text.splitlines() if l.startswith("ATOM")})
-        c1, c2, c3 = st.columns(3)
-        c1.metric("ATOM records", n_atoms)
-        c2.metric("Residues", n_residues)
-        c3.metric("File size", f"{len(pdb_text)//1024} KB")
+        if pdb_text and pdb_text.strip():
+            st.session_state.pdb_text       = pdb_text
+            st.session_state.show_analytics = True
 
-        st.markdown("### 🧬 3D Structure Viewer")
-        st.components.v1.html(show_structure(pdb_text)._make_html(), height=520)
+            n_atoms    = sum(1 for l in pdb_text.splitlines() if l.startswith("ATOM"))
+            n_residues = len({l[22:26].strip() for l in pdb_text.splitlines() if l.startswith("ATOM")})
+            c1, c2, c3 = st.columns(3)
+            c1.metric("ATOM records", n_atoms)
+            c2.metric("Residues",     n_residues)
+            c3.metric("File size",    f"{max(1, len(pdb_text) // 1024)} KB")
 
-        rmsd_val = ca_rmsd(pdb_text)
-        if rmsd_val is not None:
-            st.success(f"Cα RMSD: **{rmsd_val:.3f} Å**")
+            st.markdown("### 🧬 3D Structure Viewer")
+            try:
+                st.components.v1.html(show_structure(pdb_text)._make_html(), height=520)
+            except Exception as e:
+                st.warning(f"3D viewer could not render: {e}")
 
-        render_structural_analysis(pdb_text, prefix="pdb_")
+            rmsd_val = ca_rmsd(pdb_text)
+            if rmsd_val is not None:
+                st.success(f"Cα RMSD: **{rmsd_val:.3f} Å**")
+
+            render_structural_analysis(pdb_text, prefix="pdb_")
+        else:
+            st.error("Uploaded PDB file is empty or could not be decoded.")
 
 
 # ==========================================================
@@ -1617,12 +1698,13 @@ if st.session_state.show_analytics and len(st.session_state.pdf_figures) > 0:
     st.markdown("## 📄 Download Complete PDF Report")
     pdf_path = generate_pdf(
         metrics, st.session_state.last_prediction, st.session_state.pdf_figures)
-    with open(pdf_path, "rb") as f:
-        st.download_button(
-            "📥 Download Full Analytics PDF", f,
-            file_name="PepTastePredictor_Full_Report.pdf",
-            mime="application/pdf",
-        )
+    if os.path.exists(pdf_path):
+        with open(pdf_path, "rb") as f:
+            st.download_button(
+                "📥 Download Full Analytics PDF", f,
+                file_name="PepTastePredictor_Full_Report.pdf",
+                mime="application/pdf",
+            )
 
 
 # ==========================================================
@@ -1633,6 +1715,6 @@ st.markdown(f"""
 <div class="footer">
 &copy; {date.today().year} &nbsp; <b>PepTastePredictor</b><br>
 AI + Structural Bioinformatics platform for peptide analysis<br>
-ESMFold API &nbsp;|&nbsp; For academic, educational, and research use
+Local Structure Generation and Structural Analysis &nbsp;|&nbsp; For academic, educational, and research use
 </div>
 """, unsafe_allow_html=True)
