@@ -826,8 +826,10 @@ def load_colabfold():
 
 # ── ESMFold loader ─────────────────────────────────────────
 
-@st.cache_resource(show_spinner=False)
+@st.cache_resource
 def load_esmfold():
+    st.error("ESMFOLD FUNCTION REACHED")
+    return None, None
     """
     Load ESMFold via the facebook/esmfold_v1 model through the
     transformers / esm library.
