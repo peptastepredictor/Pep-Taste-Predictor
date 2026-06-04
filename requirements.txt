@@ -17,3 +17,4 @@ mdtraj>=1.10.0
 requests>=2.32.3
 tqdm>=4.66.4
 openpyxl>=3.1.5
+seaborn
