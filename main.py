@@ -826,32 +826,37 @@ def load_colabfold():
 
 # ── ESMFold loader ─────────────────────────────────────────
 
-@st.cache_resource
+@st.cache_resource(show_spinner=False)
 def load_esmfold():
-    st.error("ESMFOLD FUNCTION REACHED")
-    return None, None
-    """
-    Load ESMFold via the facebook/esmfold_v1 model through the
-    transformers / esm library.
-    Returns (tokenizer, model) or (None, None) if unavailable.
-    """
     try:
+        st.write("STEP 1")
+
         import torch
         from transformers import AutoTokenizer, EsmForProteinFolding
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        tokenizer = AutoTokenizer.from_pretrained("facebook/esmfold_v1")
-        model     = EsmForProteinFolding.from_pretrained(
-            "facebook/esmfold_v1",
-            low_cpu_mem_usage=True,
+        st.write("STEP 2")
+
+        tokenizer = AutoTokenizer.from_pretrained(
+            "facebook/esmfold_v1"
         )
+
+        st.write("STEP 3")
+
+        model = EsmForProteinFolding.from_pretrained(
+            "facebook/esmfold_v1"
+        )
+
+        st.write("STEP 4")
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
         model = model.to(device)
-        model.eval()
-        # Use half-precision on GPU to save memory
-        if device == "cuda":
-            model = model.half()
+
+        st.write("STEP 5")
+
         return tokenizer, model
-    except Exception:
+
+    except Exception as e:
+        st.error(f"ESMFOLD ERROR: {e}")
         return None, None
 
 
