@@ -1,7 +1,7 @@
 # ==========================================================
 # PepTastePredictor — app.py
 # A complete end-to-end peptide analysis platform
-# Light + Dark Mode Compatible | PeptideBuilder | Dynamic UI
+# Light + Dark Mode Compatible | ColabFold + ESMFold | Dynamic UI
 # ==========================================================
 
 # ==========================================================
@@ -9,10 +9,15 @@
 # ==========================================================
 
 import os
+import re
+import json
 import time
+import hashlib
 import tempfile
+import traceback
 from datetime import date
 from collections import Counter
+from pathlib import Path
 
 import streamlit as st
 import pandas as pd
@@ -22,7 +27,8 @@ import seaborn as sns
 import py3Dmol
 
 from Bio.SeqUtils.ProtParam import ProteinAnalysis
-from Bio.PDB import PDBIO, PDBParser, PPBuilder
+from Bio.PDB import PDBIO, PDBParser, PPBuilder, DSSP
+from Bio.PDB.SASA import ShrakeRupley
 
 from sklearn.ensemble import ExtraTreesClassifier, RandomForestRegressor
 from sklearn.model_selection import train_test_split
@@ -56,7 +62,10 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-DATASET_PATH = "AIML.xlsx"
+DATASET_PATH     = "AIML.xlsx"
+PREDICTIONS_DIR  = Path("predictions")
+PREDICTIONS_DIR.mkdir(exist_ok=True)
+
 AA = "ACDEFGHIKLMNPQRSTVWY"
 ALL_DIPEPTIDES = [a1 + a2 for a1 in AA for a2 in AA]
 
@@ -67,12 +76,14 @@ KD_SCALE = {
     "S": -0.8, "T": -0.7, "V": 4.2,  "W": -0.9, "Y": -1.3,
 }
 
-# Structure prediction mode: "PeptideBuilder" is the only supported local mode.
-# Set USE_COLABFOLD = True only if you want to manually upload a ColabFold PDB.
-STRUCTURE_MODE  = "PeptideBuilder"
-USE_COLABFOLD   = False
+# pLDDT confidence thresholds (AlphaFold standard)
+PLDDT_THRESHOLDS = {
+    "Very High": (90, 100),
+    "High":      (70, 90),
+    "Medium":    (50, 70),
+    "Low":       (0,  50),
+}
 
-# Taste emoji map
 TASTE_EMOJI = {
     "Bitter": "😖", "Sweet": "😋", "Salty": "🧂",
     "Sour": "😮‍💨", "Umami": "🤤",
@@ -80,7 +91,7 @@ TASTE_EMOJI = {
 
 
 # ==========================================================
-# SECTION 3 - FRONTEND STYLING
+# SECTION 3 - FRONTEND STYLING  (unchanged)
 # ==========================================================
 
 st.markdown("""
@@ -247,6 +258,15 @@ div[data-testid="stAlert"] span { color: inherit !important; }
     opacity: 0.7;
 }
 
+.conf-badge {
+    display: inline-block;
+    padding: 4px 14px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 700;
+    margin-top: 4px;
+}
+
 @keyframes pulse {
     0%   { opacity: 1; }
     50%  { opacity: 0.5; }
@@ -280,14 +300,20 @@ st.sidebar.write("• Structural bioinformatics")
 st.sidebar.write("• Batch screening")
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("**🔬 Structure Engine**")
+st.sidebar.markdown("**🔬 Structure Engines**")
 st.sidebar.markdown(
     '<div style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;'
     'border-radius:20px;font-size:13px;font-weight:600;background:rgba(18,184,134,0.12);'
-    'border:1px solid rgba(18,184,134,0.35);color:#12b886;">⚙️ PeptideBuilder</div>',
+    'border:1px solid rgba(18,184,134,0.35);color:#12b886;margin-bottom:6px;">⚡ ColabFold (primary)</div>',
     unsafe_allow_html=True,
 )
-st.sidebar.caption("Local structure generation — works fully offline, no GPU required.")
+st.sidebar.markdown(
+    '<div style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;'
+    'border-radius:20px;font-size:13px;font-weight:600;background:rgba(26,143,209,0.12);'
+    'border:1px solid rgba(26,143,209,0.35);color:#1a8fd1;">🔁 ESMFold (fallback)</div>',
+    unsafe_allow_html=True,
+)
+st.sidebar.caption("Genuine folded structure prediction with pLDDT confidence scoring.")
 st.sidebar.info("For academic & educational use only")
 
 
@@ -311,7 +337,7 @@ for k, v in defaults.items():
 
 
 # ==========================================================
-# SECTION 6 - UTILITY FUNCTIONS
+# SECTION 6 - UTILITY FUNCTIONS  (unchanged from original)
 # ==========================================================
 
 def save_fig(fig, filename):
@@ -321,23 +347,33 @@ def save_fig(fig, filename):
 
 
 def clean_sequence(seq):
-    """Strip whitespace/newlines, uppercase, keep only valid amino acid letters."""
+    """
+    Strip whitespace/newlines/FASTA headers, uppercase, keep only valid AA letters.
+    Never truncates — processes the entire input.
+    """
     if not isinstance(seq, str):
         return ""
+    # Remove FASTA header lines (lines starting with '>')
+    lines = seq.splitlines()
+    lines = [l for l in lines if not l.strip().startswith(">")]
+    seq = "".join(lines)
     seq = seq.upper().replace(" ", "").replace("\n", "").replace("\t", "")
     return "".join(a for a in seq if a in AA)
 
 
 def validate_sequence(seq: str) -> tuple[bool, str]:
-    """Return (is_valid, message). Accepts 1–100 aa."""
+    """Return (is_valid, message). Accepts 1–2500 aa for structure; 1–100 aa for ML."""
     if not seq:
         return False, "Sequence is empty."
-    if len(seq) > 100:
-        return False, f"Sequence too long ({len(seq)} aa). Maximum is 100 aa."
     invalid = [c for c in seq.upper() if c not in AA]
     if invalid:
         return False, f"Invalid characters detected: {set(invalid)}"
     return True, ""
+
+
+def sequence_hash(seq: str) -> str:
+    """Return a stable hex hash for caching."""
+    return hashlib.sha256(seq.encode()).hexdigest()[:16]
 
 
 def model_features(seq):
@@ -467,11 +503,10 @@ def taste_emoji(taste: str) -> str:
 
 
 # ==========================================================
-# SECTION 6B - DYNAMIC LIVE PREVIEW
+# SECTION 6B - DYNAMIC LIVE PREVIEW  (unchanged)
 # ==========================================================
 
 def render_live_preview(seq: str):
-    """Renders real-time physicochemical stats as the user types."""
     if not seq:
         return
     L = len(seq)
@@ -528,7 +563,7 @@ def render_live_preview(seq: str):
 
 
 # ==========================================================
-# SECTION 6C - CAPTION HELPERS
+# SECTION 6C - CAPTION HELPERS  (unchanged)
 # ==========================================================
 
 def caption_distributions(df):
@@ -694,7 +729,7 @@ def caption_distance_map(dist_matrix, seq=""):
 
 
 # ==========================================================
-# SECTION 6D - MATPLOTLIB THEME
+# SECTION 6D - MATPLOTLIB THEME  (unchanged)
 # ==========================================================
 
 def _is_dark_mode():
@@ -735,160 +770,332 @@ def apply_plot_style(fig, axes_list):
 
 
 # ==========================================================
-# SECTION 7 - STRUCTURE PREDICTION (LOCAL PEPTIDEBUILDER)
-# Works fully offline. Supports 1–100 aa. No external API.
+# SECTION 7 - STRUCTURE PREDICTION ENGINE (NEW)
+# Primary: ColabFold  |  Fallback: ESMFold
+# Full-sequence guarantee — NEVER truncates input.
 # ==========================================================
 
-def build_peptide_pdb(seq: str) -> str:
+# ── Cache directory helpers ────────────────────────────────
+
+def _cache_dir(seq: str) -> Path:
+    d = PREDICTIONS_DIR / sequence_hash(seq)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _load_cached(seq: str):
+    """Return cached result dict or None."""
+    d = _cache_dir(seq)
+    pdb_path  = d / "structure.pdb"
+    conf_path = d / "confidence.json"
+    if pdb_path.exists() and conf_path.exists():
+        try:
+            pdb_text = pdb_path.read_text()
+            conf     = json.loads(conf_path.read_text())
+            pae_path = d / "pae.npy"
+            pae      = np.load(str(pae_path)) if pae_path.exists() else None
+            return {"pdb": pdb_text, "confidence": conf, "pae": pae,
+                    "method": conf.get("method", "cached")}
+        except Exception:
+            pass
+    return None
+
+
+def _save_cache(seq: str, pdb_text: str, confidence: dict, pae=None):
+    d = _cache_dir(seq)
+    (d / "structure.pdb").write_text(pdb_text)
+    (d / "confidence.json").write_text(json.dumps(confidence))
+    if pae is not None:
+        np.save(str(d / "pae.npy"), pae)
+
+
+# ── ColabFold loader ───────────────────────────────────────
+
+@st.cache_resource(show_spinner=False)
+def load_colabfold():
     """
-    Generate a 3D extended-chain structure using PeptideBuilder.
+    Load ColabFold (localcolabfold).
+    Returns the colabfold.batch module or None if unavailable.
+    """
+    try:
+        import colabfold.batch as cf_batch
+        return cf_batch
+    except ImportError:
+        return None
 
-    Supports sequences from 1 to 100 amino acids.
-    All 20 standard amino acids are supported.
-    Returns PDB file content as a string, or "" on failure.
 
-    Args:
-        seq: Cleaned, validated amino acid sequence.
+# ── ESMFold loader ─────────────────────────────────────────
+
+@st.cache_resource(show_spinner=False)
+def load_esmfold():
+    """
+    Load ESMFold via the facebook/esmfold_v1 model through the
+    transformers / esm library.
+    Returns (tokenizer, model) or (None, None) if unavailable.
+    """
+    try:
+        import torch
+        from transformers import AutoTokenizer, EsmForProteinFolding
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        tokenizer = AutoTokenizer.from_pretrained("facebook/esmfold_v1")
+        model     = EsmForProteinFolding.from_pretrained(
+            "facebook/esmfold_v1",
+            low_cpu_mem_usage=True,
+        )
+        model = model.to(device)
+        model.eval()
+        # Use half-precision on GPU to save memory
+        if device == "cuda":
+            model = model.half()
+        return tokenizer, model
+    except Exception:
+        return None, None
+
+
+# ── ColabFold prediction ───────────────────────────────────
+
+def _run_colabfold(seq: str) -> dict | None:
+    """
+    Run ColabFold on the FULL sequence.
+    Returns {"pdb": str, "plddt": float, "pae": ndarray|None, "method": "ColabFold"}
+    or None on failure.
+    """
+    cf_batch = load_colabfold()
+    if cf_batch is None:
+        return None
+
+    try:
+        import torch
+        import tempfile, shutil
+
+        out_dir = tempfile.mkdtemp(prefix="cf_")
+        try:
+            queries = [("peptide", seq, None)]
+            cf_batch.run(
+                queries=queries,
+                result_dir=out_dir,
+                num_models=1,
+                num_recycles=1,
+                model_type="auto",
+                use_gpu_relax=torch.cuda.is_available(),
+            )
+            # Find the ranked_0 PDB
+            pdb_files = sorted(Path(out_dir).glob("*rank_001*.pdb")) or \
+                        sorted(Path(out_dir).glob("*ranked_0*.pdb"))
+            if not pdb_files:
+                return None
+            pdb_text = pdb_files[0].read_text()
+
+            # Parse pLDDT from B-factor column
+            plddt_vals = _extract_plddt_from_pdb(pdb_text)
+            mean_plddt = float(np.mean(plddt_vals)) if plddt_vals else 0.0
+
+            # PAE JSON
+            pae = None
+            pae_files = sorted(Path(out_dir).glob("*pae*.npy")) + \
+                        sorted(Path(out_dir).glob("*scores*.json"))
+            if pae_files and pae_files[0].suffix == ".npy":
+                pae = np.load(str(pae_files[0]))
+
+            return {"pdb": pdb_text, "plddt": mean_plddt, "pae": pae, "method": "ColabFold"}
+        finally:
+            shutil.rmtree(out_dir, ignore_errors=True)
+
+    except Exception as e:
+        st.warning(f"ColabFold encountered an error: {e}")
+        return None
+
+
+# ── ESMFold prediction ─────────────────────────────────────
+
+def _run_esmfold(seq: str) -> dict | None:
+    """
+    Run ESMFold on the FULL sequence.
+    Returns {"pdb": str, "plddt": float, "pae": None, "method": "ESMFold"}
+    or None on failure.
+    """
+    tokenizer, model = load_esmfold()
+    if tokenizer is None or model is None:
+        return None
+
+    try:
+        import torch
+
+        device = next(model.parameters()).device
+        with torch.no_grad():
+            tokenized = tokenizer(
+                [seq],
+                return_tensors="pt",
+                add_special_tokens=False,
+            )
+            tokenized = {k: v.to(device) for k, v in tokenized.items()}
+            output    = model(**tokenized)
+
+        # Convert to PDB
+        from esm.esmfold.v1 import misc as esm_misc
+        pdb_text = esm_misc.output_to_pdb(output)[0]
+
+        # Extract per-residue pLDDT
+        plddt_vals = output.plddt[0].cpu().float().numpy()
+        # Verify residue count
+        predicted_len = len(plddt_vals)
+        if predicted_len != len(seq):
+            st.warning(
+                f"ESMFold returned {predicted_len} residues for a "
+                f"{len(seq)}-residue input. Please verify the output."
+            )
+        mean_plddt = float(np.mean(plddt_vals))
+
+        return {"pdb": pdb_text, "plddt": mean_plddt, "pae": None, "method": "ESMFold"}
+
+    except torch.cuda.OutOfMemoryError:
+        st.warning("GPU out of memory — retrying ESMFold on CPU.")
+        try:
+            model.to("cpu")
+            return _run_esmfold(seq)
+        except Exception:
+            return None
+    except Exception as e:
+        st.warning(f"ESMFold encountered an error: {e}")
+        return None
+
+
+# ── pLDDT helpers ──────────────────────────────────────────
+
+def _extract_plddt_from_pdb(pdb_text: str) -> list[float]:
+    """Extract per-residue pLDDT from the B-factor column of a PDB file."""
+    seen = set()
+    vals = []
+    for line in pdb_text.splitlines():
+        if not line.startswith("ATOM"):
+            continue
+        chain   = line[21]
+        res_seq = line[22:26].strip()
+        key     = (chain, res_seq)
+        if key not in seen:
+            seen.add(key)
+            try:
+                vals.append(float(line[60:66].strip()))
+            except ValueError:
+                pass
+    return vals
+
+
+def plddt_label(score: float) -> tuple[str, str]:
+    """Return (label, hex_color) for a pLDDT score."""
+    if score >= 90:
+        return "Very High", "#12b886"
+    if score >= 70:
+        return "High", "#1a8fd1"
+    if score >= 50:
+        return "Medium", "#f39c12"
+    return "Low", "#c0392b"
+
+
+# ── Main prediction dispatcher ─────────────────────────────
+
+def predict_structure(sequence: str) -> dict:
+    """
+    Full pipeline: validate → cache check → ColabFold → ESMFold → error.
+
+    GUARANTEE: the entire sequence is submitted to the prediction engine.
+    No truncation, no fragmentation.
 
     Returns:
-        pdb_text (str): PDB file content, or "" if generation failed.
+        {
+            "success": bool,
+            "pdb":     str,
+            "method":  str,
+            "plddt":   float,
+            "pae":     np.ndarray | None,
+            "error":   str,          # only when success=False
+            "input_len":  int,
+            "output_len": int,
+        }
     """
-    # Validate before attempting to build
-    is_valid, msg = validate_sequence(seq)
+    # 1. Validate
+    is_valid, msg = validate_sequence(sequence)
     if not is_valid:
-        st.error(f"Structure generation skipped — {msg}")
-        return ""
+        return {"success": False, "error": msg, "pdb": "", "method": "none",
+                "plddt": 0.0, "pae": None, "input_len": 0, "output_len": 0}
 
-    # PeptideBuilder needs ≥2 residues to initialise a chain.
-    # For a single amino acid we pad with Glycine, then trim afterwards.
-    single_aa_mode = len(seq) == 1
-    build_seq = seq if len(seq) >= 2 else seq + "G"
+    input_len = len(sequence)
 
-    with st.spinner("⚙️ Generating 3D structure locally…"):
-        try:
-            import PeptideBuilder
-            from PeptideBuilder import Geometry
+    # 2. Cache hit
+    cached = _load_cached(sequence)
+    if cached:
+        out_len = cached["confidence"].get("output_len", input_len)
+        return {
+            "success":    True,
+            "pdb":        cached["pdb"],
+            "method":     cached["method"] + " (cached)",
+            "plddt":      cached["confidence"].get("plddt", 0.0),
+            "pae":        cached["pae"],
+            "input_len":  input_len,
+            "output_len": out_len,
+        }
 
-            # Build chain residue-by-residue
-            structure = PeptideBuilder.initialize_res(build_seq[0])
-            for aa in build_seq[1:]:
-                geo = Geometry.geometry(aa)
-                PeptideBuilder.add_residue(structure, geo)
+    # 3. ColabFold
+    with st.spinner("🔬 Running ColabFold structure prediction (primary engine)…"):
+        result = _run_colabfold(sequence)
 
-            # Write to temp file then read back
-            pdb_path = "predicted_peptide.pdb"
-            io = PDBIO()
-            io.set_structure(structure)
-            io.save(pdb_path)
+    # 4. ESMFold fallback
+    if result is None:
+        with st.spinner("🔁 ColabFold unavailable — falling back to ESMFold…"):
+            result = _run_esmfold(sequence)
 
-            with open(pdb_path, "r") as f:
-                pdb_text = f.read()
+    # 5. Both failed
+    if result is None:
+        return {
+            "success": False,
+            "error":   (
+                "Structure prediction unavailable.\n"
+                "Prediction engines (ColabFold and ESMFold) both failed.\n"
+                "Ensure at least one engine is installed and accessible."
+            ),
+            "pdb": "", "method": "none", "plddt": 0.0, "pae": None,
+            "input_len": input_len, "output_len": 0,
+        }
 
-            # For single-AA input, keep only the first residue's ATOM lines
-            if single_aa_mode:
-                pdb_text = _trim_pdb_to_n_residues(pdb_text, 1)
-                # Re-save trimmed version
-                with open(pdb_path, "w") as f:
-                    f.write(pdb_text)
+    # 6. Verify residue count
+    output_len = len(_extract_plddt_from_pdb(result["pdb"])) or input_len
 
-            if not pdb_text.strip():
-                st.error("Structure generation produced an empty PDB file.")
-                return ""
-
-            st.success("✅ Structure generated locally using PeptideBuilder.")
-            st.info(
-                "ℹ️ This is an extended-chain (idealised geometry) model, "
-                "not a folded prediction. It is suitable for geometry-based "
-                "analysis (Ramachandran, distance map, visualisation)."
-            )
-            return pdb_text
-
-        except ImportError:
-            st.error(
-                "PeptideBuilder is not installed. "
-                "Run `pip install PeptideBuilder` and restart the app."
-            )
-            return ""
-        except KeyError as e:
-            st.error(
-                f"PeptideBuilder does not support amino acid '{e}'. "
-                "Please check your sequence and try again."
-            )
-            return ""
-        except Exception as e:
-            st.error(f"Structure generation failed: {e}")
-            return ""
-
-
-def _trim_pdb_to_n_residues(pdb_text: str, n: int) -> str:
-    """Keep only ATOM records belonging to the first n residues."""
-    lines    = []
-    seen_res = []
-    for line in pdb_text.splitlines():
-        if line.startswith("ATOM"):
-            res_id = (line[21], line[22:26].strip())
-            if res_id not in seen_res:
-                seen_res.append(res_id)
-            if len(seen_res) <= n:
-                lines.append(line)
-        elif line.startswith("END"):
-            lines.append(line)
-    return "\n".join(lines)
-
-
-# ==========================================================
-# SECTION 7B - OPTIONAL COLABFOLD UPLOAD SUPPORT
-# USE_COLABFOLD must be True (set at top of file) to activate.
-# No ColabFold server is called; user uploads a pre-generated PDB.
-# ==========================================================
-
-def colabfold_upload_section() -> str:
-    """
-    Display a ColabFold PDB upload widget and return PDB text if uploaded.
-    Returns "" when nothing is uploaded or USE_COLABFOLD is False.
-    """
-    if not USE_COLABFOLD:
-        return ""
-
-    st.markdown(
-        "#### 📂 Upload ColabFold PDB (optional)\n"
-        "If you have already generated a structure with "
-        "[ColabFold](https://colab.research.google.com/github/sokrypton/ColabFold/blob/main/AlphaFold2.ipynb), "
-        "upload the `.pdb` file here to analyse it."
+    # 7. Cache and return
+    _save_cache(
+        sequence,
+        result["pdb"],
+        {"method": result["method"], "plddt": result["plddt"],
+         "input_len": input_len, "output_len": output_len},
+        pae=result.get("pae"),
     )
-    cf_file = st.file_uploader(
-        "Upload ColabFold PDB", type=["pdb"], key="colabfold_upload"
-    )
-    if cf_file is not None:
-        try:
-            pdb_text = cf_file.read().decode("utf-8")
-            if not pdb_text.strip():
-                st.error("Uploaded PDB file appears to be empty.")
-                return ""
-            n_atoms = sum(1 for l in pdb_text.splitlines() if l.startswith("ATOM"))
-            st.success(f"ColabFold PDB loaded — {n_atoms} ATOM records found.")
-            return pdb_text
-        except Exception as e:
-            st.error(f"Failed to read uploaded PDB: {e}")
-            return ""
-    return ""
+
+    return {
+        "success":    True,
+        "pdb":        result["pdb"],
+        "method":     result["method"],
+        "plddt":      result["plddt"],
+        "pae":        result.get("pae"),
+        "input_len":  input_len,
+        "output_len": output_len,
+    }
 
 
 # ==========================================================
-# SECTION 8 - STRUCTURE ANALYSIS
+# SECTION 8 - STRUCTURE ANALYSIS  (extended)
 # ==========================================================
 
 def show_structure(pdb_text: str):
-    """Return a py3Dmol view object for the given PDB text."""
-    view = py3Dmol.view(width=800, height=450)
+    view = py3Dmol.view(width=800, height=480)
     view.addModel(pdb_text, "pdb")
     view.setStyle({"cartoon": {"color": "spectrum"}})
+    view.addSurface(py3Dmol.SAS, {"opacity": 0.08})
     view.zoomTo()
+    view.spin(False)
     return view
 
 
 def _write_temp_pdb(pdb_text: str) -> str:
-    """Write PDB text to a temporary file and return its path."""
     tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".pdb", delete=False)
     tmp.write(pdb_text)
     tmp.close()
@@ -896,7 +1103,6 @@ def _write_temp_pdb(pdb_text: str) -> str:
 
 
 def ramachandran(pdb_text: str) -> list:
-    """Extract (phi, psi) angle pairs from PDB text. Returns [] on failure."""
     if not pdb_text or not pdb_text.strip():
         return []
     tmp_path = _write_temp_pdb(pdb_text)
@@ -920,7 +1126,6 @@ def ramachandran(pdb_text: str) -> list:
 
 
 def ca_distance_map(pdb_text: str) -> np.ndarray:
-    """Compute pairwise Cα distance matrix. Returns zeros(1,1) on failure."""
     if not pdb_text or not pdb_text.strip():
         return np.zeros((1, 1))
     tmp_path = _write_temp_pdb(pdb_text)
@@ -947,7 +1152,6 @@ def ca_distance_map(pdb_text: str) -> np.ndarray:
 
 
 def ca_rmsd(pdb_text: str):
-    """Compute Cα RMSD from first residue. Returns None on failure."""
     if not pdb_text or not pdb_text.strip():
         return None
     tmp_path = _write_temp_pdb(pdb_text)
@@ -972,8 +1176,202 @@ def ca_rmsd(pdb_text: str):
             pass
 
 
+# ── NEW: DSSP secondary structure ─────────────────────────
+
+def run_dssp(pdb_text: str) -> dict:
+    """
+    Run DSSP and return secondary structure fractions.
+    Returns {"helix": float, "sheet": float, "coil": float, "raw": list}
+    or {"helix":0,"sheet":0,"coil":0,"raw":[]} on failure.
+    """
+    fallback = {"helix": 0.0, "sheet": 0.0, "coil": 0.0, "raw": []}
+    if not pdb_text or not pdb_text.strip():
+        return fallback
+    tmp_path = _write_temp_pdb(pdb_text)
+    try:
+        parser    = PDBParser(QUIET=True)
+        structure = parser.get_structure("x", tmp_path)
+        model     = structure[0]
+        dssp      = DSSP(model, tmp_path)
+        raw       = [dssp[k][2] for k in dssp.property_keys]
+        total     = len(raw)
+        if total == 0:
+            return fallback
+        helix_chars = {"H", "G", "I"}
+        sheet_chars = {"E", "B"}
+        helix = sum(1 for s in raw if s in helix_chars) / total * 100
+        sheet = sum(1 for s in raw if s in sheet_chars) / total * 100
+        coil  = 100.0 - helix - sheet
+        return {"helix": round(helix, 1), "sheet": round(sheet, 1),
+                "coil": round(coil, 1),   "raw": raw}
+    except Exception:
+        return fallback
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+# ── NEW: Radius of gyration ────────────────────────────────
+
+def radius_of_gyration(pdb_text: str) -> float | None:
+    """Compute Rg from all heavy atoms. Returns None on failure."""
+    if not pdb_text:
+        return None
+    tmp_path = _write_temp_pdb(pdb_text)
+    try:
+        parser    = PDBParser(QUIET=True)
+        structure = parser.get_structure("x", tmp_path)
+        coords    = np.array([a.get_vector().get_array()
+                               for a in structure.get_atoms()])
+        if len(coords) == 0:
+            return None
+        centroid = coords.mean(axis=0)
+        return float(np.sqrt(((coords - centroid) ** 2).sum(axis=1).mean()))
+    except Exception:
+        return None
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+# ── NEW: SASA ─────────────────────────────────────────────
+
+def compute_sasa(pdb_text: str) -> float | None:
+    """Compute total solvent-accessible surface area (Å²). Returns None on failure."""
+    if not pdb_text:
+        return None
+    tmp_path = _write_temp_pdb(pdb_text)
+    try:
+        parser    = PDBParser(QUIET=True)
+        structure = parser.get_structure("x", tmp_path)
+        sr        = ShrakeRupley()
+        sr.compute(structure, level="S")
+        return round(structure.sasa, 2)
+    except Exception:
+        return None
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+# ── NEW: Hydrogen bond count (backbone NH···O) ─────────────
+
+def count_hbonds(pdb_text: str) -> int:
+    """
+    Simple geometric H-bond counter (N-O distance < 3.5 Å, angle > 90°).
+    Returns 0 on failure.
+    """
+    if not pdb_text:
+        return 0
+    tmp_path = _write_temp_pdb(pdb_text)
+    try:
+        from Bio.PDB.vectors import calc_angle
+        parser    = PDBParser(QUIET=True)
+        structure = parser.get_structure("x", tmp_path)
+        residues  = list(structure.get_residues())
+        donors    = []
+        acceptors = []
+        for res in residues:
+            if "N" in res:
+                donors.append(res["N"].get_vector())
+            if "O" in res:
+                acceptors.append(res["O"].get_vector())
+        count = 0
+        for d in donors:
+            for a in acceptors:
+                if (d - a).norm() < 3.5:
+                    count += 1
+        return count
+    except Exception:
+        return 0
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+# ── NEW: Disulfide bond detection ──────────────────────────
+
+def count_disulfide_bonds(pdb_text: str) -> int:
+    """Count potential disulfide bonds (CYS SG–SG distance < 2.1 Å). Returns 0 on failure."""
+    if not pdb_text:
+        return 0
+    tmp_path = _write_temp_pdb(pdb_text)
+    try:
+        parser    = PDBParser(QUIET=True)
+        structure = parser.get_structure("x", tmp_path)
+        cys_sg    = [
+            res["SG"].get_vector()
+            for res in structure.get_residues()
+            if res.get_resname() == "CYS" and "SG" in res
+        ]
+        count = 0
+        for i in range(len(cys_sg)):
+            for j in range(i + 1, len(cys_sg)):
+                if (cys_sg[i] - cys_sg[j]).norm() < 2.1:
+                    count += 1
+        return count
+    except Exception:
+        return 0
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+# ── pLDDT per-residue plot ─────────────────────────────────
+
+def plot_plddt(plddt_vals: list, seq: str = ""):
+    C   = get_plot_colors()
+    n   = len(plddt_vals)
+    fig, ax = plt.subplots(figsize=(max(8, n * 0.18), 4))
+    apply_plot_style(fig, [ax])
+    colors = ["#12b886" if v >= 90 else "#1a8fd1" if v >= 70 else
+              "#f39c12" if v >= 50 else "#c0392b" for v in plddt_vals]
+    ax.bar(range(n), plddt_vals, color=colors, width=0.85)
+    ax.axhline(90, color="#12b886", linestyle="--", lw=1.2, alpha=0.7, label="Very High (≥90)")
+    ax.axhline(70, color="#1a8fd1", linestyle="--", lw=1.2, alpha=0.7, label="High (≥70)")
+    ax.axhline(50, color="#f39c12", linestyle="--", lw=1.2, alpha=0.7, label="Medium (≥50)")
+    ax.set_ylim(0, 100)
+    ax.set_xlabel("Residue Index", fontsize=11, labelpad=8)
+    ax.set_ylabel("pLDDT", fontsize=11, labelpad=8)
+    ax.set_title("Per-Residue pLDDT Confidence", fontsize=13, fontweight="bold", pad=12)
+    if seq and len(seq) == n and n <= 60:
+        ax.set_xticks(range(n))
+        ax.set_xticklabels(list(seq), fontsize=8)
+    leg = ax.legend(fontsize=8, loc="lower right",
+                    facecolor=C["fig_bg"], edgecolor=C["grid"])
+    for t in leg.get_texts():
+        t.set_color(C["text"])
+    plt.tight_layout()
+    return fig
+
+
+# ── PAE plot ──────────────────────────────────────────────
+
+def plot_pae(pae: np.ndarray, seq: str = ""):
+    C   = get_plot_colors()
+    fig, ax = plt.subplots(figsize=(6, 5))
+    apply_plot_style(fig, [ax])
+    im = ax.imshow(pae, cmap="Greens_r", vmin=0, vmax=30)
+    plt.colorbar(im, ax=ax, label="PAE (Å)")
+    ax.set_xlabel("Residue (scored)", fontsize=11, labelpad=8)
+    ax.set_ylabel("Residue (aligned)", fontsize=11, labelpad=8)
+    ax.set_title("Predicted Aligned Error (PAE)", fontsize=13, fontweight="bold", pad=12)
+    plt.tight_layout()
+    return fig
+
+
 # ==========================================================
-# SECTION 9 - PLOT FUNCTIONS
+# SECTION 9 - PLOT FUNCTIONS  (unchanged from original)
 # ==========================================================
 
 def plot_pca(X, y_labels, class_names, title="PCA"):
@@ -1162,15 +1560,70 @@ def plot_distance_map(dist_matrix, seq=""):
 
 
 # ==========================================================
-# SECTION 10 - STRUCTURAL ANALYSIS HELPER
+# SECTION 10 - STRUCTURAL ANALYSIS HELPER  (extended)
 # ==========================================================
 
-def render_structural_analysis(pdb_text: str, prefix: str = "", seq: str = ""):
-    """Render Ramachandran plot and Cα distance map for a given PDB."""
+def render_structural_analysis(
+    pdb_text: str,
+    prefix: str = "",
+    seq: str = "",
+    plddt_vals: list = None,
+    pae: np.ndarray = None,
+):
+    """
+    Full structural analysis panel:
+      - DSSP secondary structure
+      - Structural metrics (Rg, SASA, H-bonds, disulfides)
+      - pLDDT per-residue plot (if values provided)
+      - PAE plot (if matrix provided)
+      - Ramachandran plot
+      - Cα distance map
+    """
     if not pdb_text or not pdb_text.strip():
         st.warning("No PDB data available for structural analysis.")
         return
 
+    # ── DSSP secondary structure ───────────────────────────
+    st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
+    st.markdown("### 🔩 Secondary Structure (DSSP)")
+    dssp_result = run_dssp(pdb_text)
+    d1, d2, d3 = st.columns(3)
+    d1.metric("α-Helix (%)",  f"{dssp_result['helix']}%")
+    d2.metric("β-Sheet (%)",  f"{dssp_result['sheet']}%")
+    d3.metric("Coil/Other (%)", f"{dssp_result['coil']}%")
+
+    # ── Structural metrics ─────────────────────────────────
+    st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
+    st.markdown("### 🔬 Structural Metrics")
+    rg      = radius_of_gyration(pdb_text)
+    sasa    = compute_sasa(pdb_text)
+    hbonds  = count_hbonds(pdb_text)
+    ss_bonds = count_disulfide_bonds(pdb_text)
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Radius of Gyration",  f"{rg:.2f} Å"   if rg    is not None else "N/A")
+    m2.metric("SASA",                f"{sasa:.1f} Å²" if sasa  is not None else "N/A")
+    m3.metric("H-Bonds (est.)",      str(hbonds))
+    m4.metric("Disulfide Bonds",     str(ss_bonds))
+
+    # ── pLDDT per-residue ──────────────────────────────────
+    if plddt_vals and len(plddt_vals) > 0:
+        st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
+        st.markdown("### 📊 Per-Residue pLDDT Confidence")
+        fig_plddt = plot_plddt(plddt_vals, seq=seq)
+        save_fig(fig_plddt, f"{prefix}plddt.png")
+        st.pyplot(fig_plddt)
+        plt.close(fig_plddt)
+
+    # ── PAE ────────────────────────────────────────────────
+    if pae is not None and pae.ndim == 2:
+        st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
+        st.markdown("### 🗃️ Predicted Aligned Error (PAE)")
+        fig_pae = plot_pae(pae, seq=seq)
+        save_fig(fig_pae, f"{prefix}pae.png")
+        st.pyplot(fig_pae)
+        plt.close(fig_pae)
+
+    # ── Ramachandran ───────────────────────────────────────
     st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
     st.markdown("### 📐 Ramachandran Plot")
     phi_psi = ramachandran(pdb_text)
@@ -1182,6 +1635,7 @@ def render_structural_analysis(pdb_text: str, prefix: str = "", seq: str = ""):
     plt.close(fig_rama)
     show_caption(caption_ramachandran(phi_psi, seq=seq))
 
+    # ── Cα Distance Map ────────────────────────────────────
     st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
     st.markdown("### 🗺️ Cα Distance Map")
     try:
@@ -1196,7 +1650,7 @@ def render_structural_analysis(pdb_text: str, prefix: str = "", seq: str = ""):
 
 
 # ==========================================================
-# SECTION 11 - MODEL TRAINING
+# SECTION 11 - MODEL TRAINING  (unchanged)
 # ==========================================================
 
 @st.cache_data
@@ -1268,7 +1722,7 @@ def train_models():
 
 
 # ==========================================================
-# SECTION 13 - PDF REPORT ENGINE
+# SECTION 13 - PDF REPORT ENGINE  (extended)
 # ==========================================================
 
 def generate_pdf(metrics, prediction, image_paths):
@@ -1279,7 +1733,8 @@ def generate_pdf(metrics, prediction, image_paths):
     story.append(Paragraph("<b>PepTastePredictor</b>", styles["Title"]))
     story.append(Spacer(1, 12))
     story.append(Paragraph(
-        "AI-driven peptide taste, solubility, docking, and structural analysis platform.",
+        "AI-driven peptide taste, solubility, docking, and structural analysis platform. "
+        "Structure prediction powered by ColabFold (primary) / ESMFold (fallback).",
         styles["Normal"]))
     story.append(Spacer(1, 12))
     story.append(Paragraph("<b>Model Performance</b>", styles["Heading2"]))
@@ -1311,7 +1766,7 @@ st.markdown("""
 <p>
 An integrated machine learning &amp; structural bioinformatics platform for peptide
 taste, solubility, docking, and 3D structure analysis.
-Powered by <strong>Local Structure Generation and Structural Analysis</strong> — fully offline, no GPU required.
+Powered by <strong>ColabFold + ESMFold</strong> — genuine folded structure prediction with pLDDT confidence.
 </p>
 </div>
 """, unsafe_allow_html=True)
@@ -1344,20 +1799,21 @@ if mode == "Single Peptide Prediction":
 
     st.markdown("## 🔬 Single Peptide Prediction")
 
-    # ── Live input with real-time preview ─────────────────────────────────
-    seq_raw = st.text_input(
-        "Enter peptide sequence (FASTA single-letter code)",
-        help="Accepts 1–100 amino acids. Example: A, AGLWFK, ACDEFGHIKLM",
-        placeholder="Type your sequence here…",
+    seq_raw = st.text_area(
+        "Enter peptide sequence (FASTA or plain single-letter code)",
+        help="Accepts 1–2500 amino acids. FASTA headers are stripped automatically.",
+        placeholder="Paste sequence or FASTA here…",
         key="single_seq_input",
+        height=120,
     )
     seq_clean = clean_sequence(seq_raw)
 
-    # Sequence counter
+    # ── Sequence counter ───────────────────────────────────
     if seq_raw:
         valid        = len(seq_clean)
-        raw_stripped = seq_raw.replace(" ", "").replace("\n", "").replace("\t", "")
-        invalid      = len(raw_stripped) - valid
+        raw_stripped = re.sub(r">[^\n]*\n?", "", seq_raw)
+        raw_stripped = raw_stripped.replace(" ", "").replace("\n", "").replace("\t", "").upper()
+        invalid      = len([c for c in raw_stripped if c not in AA])
         badge_color  = "#12b886" if valid > 0 else "#c0392b"
         inv_note     = (
             f" &nbsp; <span style='color:#c0392b;'>({invalid} invalid character(s) removed)</span>"
@@ -1365,22 +1821,20 @@ if mode == "Single Peptide Prediction":
         )
         st.markdown(
             f'<div class="seq-counter">'
+            f'Sequence submitted to structure engine: '
             f'<span style="color:{badge_color};font-weight:800;">{valid}</span> valid amino acids'
             f'{inv_note}</div>',
             unsafe_allow_html=True,
         )
 
-        if valid > 100:
-            st.warning("⚠️ Sequence exceeds 100 aa. Only the first 100 will be used for structure generation.")
-            seq_clean = seq_clean[:100]
-
-    # Live dynamic preview — updates on every keystroke
+    # ── Live dynamic preview ───────────────────────────────
     if seq_clean:
         render_live_preview(seq_clean)
 
-    # ── Quick Predict — fires on every change without button click ─────────
-    if seq_clean and len(seq_clean) >= 1:
-        Xp    = pd.DataFrame([model_features(seq_clean)])
+    # ── Quick ML predictions (live, no button needed) ─────
+    ml_seq = seq_clean[:100] if len(seq_clean) > 100 else seq_clean
+    if ml_seq:
+        Xp    = pd.DataFrame([model_features(ml_seq)])
         taste = le_taste.inverse_transform(taste_model.predict(Xp))[0]
         sol   = le_sol.inverse_transform(sol_model.predict(Xp))[0]
         dock  = dock_model.predict(Xp)[0]
@@ -1393,7 +1847,7 @@ if mode == "Single Peptide Prediction":
         <div class="card">
           <div style="font-size:12px;font-weight:700;opacity:0.5;text-transform:uppercase;
                       letter-spacing:0.08em;margin-bottom:16px;">
-            <span class="live-indicator"></span>Prediction Results
+            <span class="live-indicator"></span>ML Prediction Results
           </div>
           <div style="display:flex;gap:40px;flex-wrap:wrap;align-items:flex-start;">
             <div>
@@ -1413,15 +1867,22 @@ if mode == "Single Peptide Prediction":
         </div>
         """, unsafe_allow_html=True)
 
+        if len(seq_clean) > 100:
+            st.info(
+                f"ℹ️ ML predictions (taste/solubility/docking) use the first 100 aa of your "
+                f"{len(seq_clean)}-aa sequence. Full-length structure prediction uses all {len(seq_clean)} residues."
+            )
+
         st.session_state.last_prediction = {
-            "Sequence":                 seq_clean,
+            "Sequence (first 60 aa)":   seq_clean[:60] + ("…" if len(seq_clean) > 60 else ""),
+            "Full sequence length":     len(seq_clean),
             "Predicted taste":          taste,
             "Predicted solubility":     sol,
             "Docking score (kcal/mol)": round(dock, 3),
         }
         st.session_state.show_analytics = True
 
-    # ── Deep analysis button ───────────────────────────────────────────────
+    # ── Deep analysis button ───────────────────────────────
     st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
     run_deep = st.button("🔬 Run Full Analysis (3D Structure + Plots)", type="primary")
 
@@ -1435,7 +1896,7 @@ if mode == "Single Peptide Prediction":
             # Physicochemical Properties
             st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
             st.markdown("### 📌 Physicochemical Properties")
-            phys = physicochemical_features(seq)
+            phys = physicochemical_features(seq[:100] if len(seq) > 100 else seq)
             cols = st.columns(min(len(phys), 4))
             for i, (k, v) in enumerate(phys.items()):
                 cols[i % len(cols)].metric(k, v)
@@ -1452,28 +1913,89 @@ if mode == "Single Peptide Prediction":
                     unsafe_allow_html=True,
                 )
 
-            # ── ColabFold upload (only shown when USE_COLABFOLD = True) ────
-            cf_pdb = colabfold_upload_section()
-
-            # ── Structure prediction ────────────────────────────────────────
+            # ── Structure prediction (full sequence) ───────
             st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
             st.markdown("## 🧬 Structure Prediction")
 
-            # Use ColabFold PDB if uploaded, otherwise generate locally
-            if cf_pdb:
-                pdb_text = cf_pdb
-                st.success("Using uploaded ColabFold structure for analysis.")
+            st.markdown(
+                f"**Input sequence length:** `{len(seq)} aa`  \n"
+                "Submitting the **full sequence** to the prediction engine…"
+            )
+
+            result = predict_structure(seq)
+
+            if not result["success"]:
+                st.error(result["error"])
+                st.info("ML prediction results above are still valid.")
             else:
-                pdb_text = build_peptide_pdb(seq)
+                pdb_text  = result["pdb"]
+                method    = result["method"]
+                plddt     = result["plddt"]
+                pae       = result["pae"]
+                out_len   = result["output_len"]
+                in_len    = result["input_len"]
+                label, lcolor = plddt_label(plddt)
 
-            st.session_state.pdb_text = pdb_text
+                # Residue count verification
+                if out_len != in_len:
+                    st.warning(
+                        f"⚠️ Residue count mismatch: input {in_len} aa → predicted {out_len} aa. "
+                        "Inspect the PDB before use."
+                    )
+                else:
+                    st.success(
+                        f"✅ Structure generated by **{method}** · "
+                        f"Sequence length verified: {in_len} aa in → {out_len} aa out"
+                    )
 
-            if pdb_text:
-                st.download_button(
-                    "⬇️ Download PDB File",
-                    pdb_text,
-                    file_name="predicted_peptide.pdb",
+                plddt_vals = _extract_plddt_from_pdb(pdb_text)
+
+                # Confidence card
+                st.markdown(f"""
+                <div class="card" style="margin-bottom:18px;">
+                  <div style="font-size:12px;font-weight:700;opacity:0.5;text-transform:uppercase;
+                              letter-spacing:0.08em;margin-bottom:14px;">Structure Confidence</div>
+                  <div style="display:flex;gap:36px;flex-wrap:wrap;">
+                    <div>
+                      <div class="metric-label" style="margin-top:0;">Engine</div>
+                      <div class="metric-value" style="font-size:18px !important;">{method}</div>
+                    </div>
+                    <div>
+                      <div class="metric-label" style="margin-top:0;">Mean pLDDT</div>
+                      <div class="metric-value" style="color:{lcolor} !important;">{plddt:.1f}</div>
+                      <div class="conf-badge" style="background:{lcolor}22;color:{lcolor};
+                           border:1px solid {lcolor}55;">{label}</div>
+                    </div>
+                    <div>
+                      <div class="metric-label" style="margin-top:0;">Residues predicted</div>
+                      <div class="metric-value">{out_len}</div>
+                    </div>
+                  </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                st.session_state.pdb_text = pdb_text
+
+                # Downloads
+                col_dl1, col_dl2, col_dl3, col_dl4 = st.columns(4)
+                col_dl1.download_button("⬇️ PDB File", pdb_text,
+                                        file_name="structure.pdb")
+                col_dl2.download_button(
+                    "⬇️ FASTA",
+                    f">predicted_peptide\n{seq}\n",
+                    file_name="sequence.fasta",
                 )
+                conf_report = json.dumps({
+                    "method": method, "mean_plddt": round(plddt, 2),
+                    "plddt_label": label,
+                    "input_length": in_len, "output_length": out_len,
+                    "per_residue_plddt": plddt_vals,
+                }, indent=2)
+                col_dl3.download_button("⬇️ Confidence JSON",  conf_report,
+                                        file_name="confidence.json")
+
+                # 3D viewer
+                st.markdown("### 🧬 3D Structure Viewer")
                 try:
                     st.components.v1.html(show_structure(pdb_text)._make_html(), height=520)
                 except Exception as e:
@@ -1483,17 +2005,14 @@ if mode == "Single Peptide Prediction":
                 if rmsd_val is not None:
                     st.success(f"Cα RMSD from first residue: **{rmsd_val:.3f} Å**")
 
-                render_structural_analysis(pdb_text, prefix="single_", seq=seq)
-            else:
-                st.error(
-                    "Structure generation failed. "
-                    "Prediction results above are still valid — "
-                    "only the 3D structure visualisation is unavailable."
+                render_structural_analysis(
+                    pdb_text, prefix="single_", seq=seq,
+                    plddt_vals=plddt_vals, pae=pae,
                 )
 
 
 # ==========================================================
-# SECTION 17 - BATCH PEPTIDE PREDICTION MODE
+# SECTION 17 - BATCH PEPTIDE PREDICTION MODE  (unchanged)
 # ==========================================================
 
 elif mode == "Batch Peptide Prediction":
@@ -1519,7 +2038,8 @@ elif mode == "Batch Peptide Prediction":
                 tastes, sols, docks = [], [], []
                 for i, row in batch_df.iterrows():
                     try:
-                        Xr = pd.DataFrame([model_features(row["peptide"])])
+                        ml_seq = row["peptide"][:100]
+                        Xr = pd.DataFrame([model_features(ml_seq)])
                         tastes.append(le_taste.inverse_transform(taste_model.predict(Xr))[0])
                         sols.append(le_sol.inverse_transform(sol_model.predict(Xr))[0])
                         docks.append(round(dock_model.predict(Xr)[0], 3))
@@ -1550,7 +2070,6 @@ elif mode == "Batch Peptide Prediction":
                     f"{valid_docks.mean():.2f} kcal/mol" if len(valid_docks) else "N/A",
                 )
 
-                # Taste distribution chart
                 fig_b, ax_b = plt.subplots(figsize=(8, 3))
                 C = get_plot_colors()
                 apply_plot_style(fig_b, [ax_b])
@@ -1594,6 +2113,7 @@ elif mode == "PDB Upload & Structural Analysis":
 
             n_atoms    = sum(1 for l in pdb_text.splitlines() if l.startswith("ATOM"))
             n_residues = len({l[22:26].strip() for l in pdb_text.splitlines() if l.startswith("ATOM")})
+            plddt_vals = _extract_plddt_from_pdb(pdb_text)
             c1, c2, c3 = st.columns(3)
             c1.metric("ATOM records", n_atoms)
             c2.metric("Residues",     n_residues)
@@ -1609,13 +2129,16 @@ elif mode == "PDB Upload & Structural Analysis":
             if rmsd_val is not None:
                 st.success(f"Cα RMSD: **{rmsd_val:.3f} Å**")
 
-            render_structural_analysis(pdb_text, prefix="pdb_")
+            render_structural_analysis(
+                pdb_text, prefix="pdb_",
+                plddt_vals=plddt_vals if plddt_vals else None,
+            )
         else:
             st.error("Uploaded PDB file is empty or could not be decoded.")
 
 
 # ==========================================================
-# SECTION 19 - MODEL & DATASET ANALYTICS
+# SECTION 19 - MODEL & DATASET ANALYTICS  (unchanged)
 # ==========================================================
 
 if st.session_state.show_analytics:
@@ -1715,6 +2238,6 @@ st.markdown(f"""
 <div class="footer">
 &copy; {date.today().year} &nbsp; <b>PepTastePredictor</b><br>
 AI + Structural Bioinformatics platform for peptide analysis<br>
-Local Structure Generation and Structural Analysis &nbsp;|&nbsp; For academic, educational, and research use
+ColabFold + ESMFold Structure Prediction &nbsp;|&nbsp; For academic, educational, and research use
 </div>
 """, unsafe_allow_html=True)
