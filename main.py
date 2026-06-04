@@ -2,6 +2,7 @@
 # PepTastePredictor — app.py
 # A complete end-to-end peptide analysis platform
 # Light + Dark Mode Compatible Version
+# ESMFold-powered structure prediction
 # ==========================================================
 
 # ==========================================================
@@ -22,8 +23,6 @@ import py3Dmol
 
 from Bio.SeqUtils.ProtParam import ProteinAnalysis
 from Bio.PDB import PDBIO, PDBParser, PPBuilder
-import PeptideBuilder
-from PeptideBuilder import Geometry
 
 from sklearn.ensemble import ExtraTreesClassifier, RandomForestRegressor
 from sklearn.model_selection import train_test_split
@@ -245,7 +244,6 @@ div[data-testid="stAlert"] span { color: inherit !important; }
 )
 
 
-
 # ==========================================================
 # SECTION 4 - SIDEBAR
 # ==========================================================
@@ -261,6 +259,20 @@ st.sidebar.write("• Docking estimation")
 st.sidebar.write("• Structural bioinformatics")
 st.sidebar.write("• Batch screening")
 st.sidebar.info("For academic & educational use only")
+
+# ESMFold installation note in sidebar
+with st.sidebar.expander("⚙️ ESMFold Installation", expanded=False):
+    st.markdown("""
+**Required packages:**
+```bash
+pip install torch torchvision
+pip install transformers>=4.24.0
+pip install accelerate
+pip install fair-esm
+```
+ESMFold loads once and is cached for the session.
+GPU is used automatically if CUDA is available.
+""")
 
 
 # ==========================================================
@@ -673,19 +685,279 @@ def apply_plot_style(fig, axes_list):
 
 
 # ==========================================================
-# SECTION 7 - STRUCTURE GENERATION & ANALYSIS
+# SECTION 7 - ESMFOLD STRUCTURE PREDICTION
+# Replaces PeptideBuilder with AI-based folding
 # ==========================================================
 
-def build_peptide_pdb(seq):
-    structure = PeptideBuilder.initialize_res(seq[0])
-    for aa in seq[1:]:
-        PeptideBuilder.add_residue(structure, Geometry.geometry(aa))
-    io = PDBIO()
-    io.set_structure(structure)
-    io.save("predicted_peptide.pdb")
-    with open("predicted_peptide.pdb") as f:
-        return f.read()
+@st.cache_resource
+def load_esmfold():
+    """
+    Load ESMFold model once and cache for the session.
+    Automatically uses GPU if CUDA is available, otherwise CPU.
 
+    Required installation:
+        pip install torch torchvision
+        pip install transformers>=4.24.0
+        pip install accelerate
+        pip install fair-esm
+    """
+    try:
+        import torch
+        from transformers import EsmForProteinFolding, AutoTokenizer
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        st.sidebar.info(f"ESMFold device: **{device.upper()}**")
+
+        tokenizer = AutoTokenizer.from_pretrained("facebook/esmfold_v1")
+        model = EsmForProteinFolding.from_pretrained(
+            "facebook/esmfold_v1",
+            low_cpu_mem_usage=True,
+        )
+        model = model.to(device)
+        model.eval()
+
+        # Reduce memory footprint on CPU
+        if device == "cpu":
+            model.esm = model.esm.half()
+
+        return tokenizer, model, device
+
+    except ImportError as e:
+        return None, None, str(e)
+    except Exception as e:
+        return None, None, str(e)
+
+
+def _esmfold_to_pdb(output, tokenizer) -> tuple[str, float]:
+    """
+    Convert ESMFold model output to PDB string and extract mean pLDDT.
+
+    Returns:
+        pdb_text (str): Full PDB file content.
+        mean_plddt (float): Mean per-residue confidence score (0–100).
+    """
+    import torch
+
+    # Extract pLDDT confidence scores (per-residue, 0–100)
+    plddt = output.plddt[0].detach().cpu().float().numpy()  # shape: (L,)
+    mean_plddt = float(plddt.mean())
+
+    # Convert to PDB via ESMFold's built-in converter
+    # output.positions: (num_recycling, L, 37, 3) — take the last recycling step
+    from esm.esmfold.v1 import misc as esm_misc
+
+    # Use the protein_to_pdb helper that ships with fair-esm
+    pdb_string = esm_misc.output_to_pdb(output)[0]
+
+    return pdb_string, mean_plddt
+
+
+def _manual_pdb_from_output(output, sequence: str) -> tuple[str, float]:
+    """
+    Fallback PDB writer that works without fair-esm's output_to_pdb helper.
+    Writes Cα-only ATOM records from ESMFold's predicted positions.
+
+    Returns:
+        pdb_text (str): PDB file content.
+        mean_plddt (float): Mean pLDDT confidence (0–100).
+    """
+    import torch
+
+    THREE_LETTER = {
+        "A": "ALA", "C": "CYS", "D": "ASP", "E": "GLU", "F": "PHE",
+        "G": "GLY", "H": "HIS", "I": "ILE", "K": "LYS", "L": "LEU",
+        "M": "MET", "N": "ASN", "P": "PRO", "Q": "GLN", "R": "ARG",
+        "S": "SER", "T": "THR", "V": "VAL", "W": "TRP", "Y": "TYR",
+    }
+
+    # pLDDT: (1, L, num_atoms) — atom 1 is Cα
+    plddt_per_residue = output.plddt[0, :, 1].detach().cpu().float().numpy()
+    mean_plddt = float(plddt_per_residue.mean())
+
+    # positions: (num_recycling_steps, 1, L, 37, 3)
+    # Last recycling step, batch 0, all residues, Cα atom index = 1
+    positions = output.positions[-1, 0, :, 1, :].detach().cpu().float().numpy()
+
+    lines = ["REMARK  PepTastePredictor — ESMFold predicted structure (Cα trace)"]
+    for i, (aa, (x, y, z)) in enumerate(zip(sequence, positions)):
+        res_name = THREE_LETTER.get(aa, "UNK")
+        b_factor = float(plddt_per_residue[i]) if i < len(plddt_per_residue) else 0.0
+        lines.append(
+            f"ATOM  {i+1:5d}  CA  {res_name} A{i+1:4d}    "
+            f"{x:8.3f}{y:8.3f}{z:8.3f}  1.00{b_factor:6.2f}           C"
+        )
+    lines.append("END")
+    return "\n".join(lines), mean_plddt
+
+
+def build_peptide_pdb(seq: str) -> str:
+    """
+    Generate a 3D structure for the given amino acid sequence using ESMFold.
+
+    Replaces the PeptideBuilder extended-chain generator with a real
+    AI-based protein folding prediction.
+
+    Args:
+        seq: Cleaned amino acid sequence (single-letter codes, uppercase).
+
+    Returns:
+        pdb_text (str): Full PDB file content of the predicted structure.
+
+    Side effects:
+        - Saves the PDB to 'predicted_peptide.pdb'.
+        - Displays pLDDT confidence in the Streamlit UI.
+        - Shows warnings/errors via Streamlit if ESMFold is unavailable.
+    """
+    import torch
+
+    # ── 1. Load (cached) ESMFold ───────────────────────────────────────────
+    tokenizer, model, device = load_esmfold()
+
+    if tokenizer is None or model is None:
+        # ESMFold not available — fall back gracefully with a warning
+        st.warning(
+            f"⚠️ ESMFold could not be loaded ({device}). "
+            "Falling back to extended-chain PeptideBuilder structure.\n\n"
+            "To enable ESMFold, run:\n"
+            "```\npip install torch transformers>=4.24.0 accelerate fair-esm\n```"
+        )
+        return _fallback_peptidebuilder(seq)
+
+    # ── 2. Tokenise ────────────────────────────────────────────────────────
+    try:
+        tokenized = tokenizer(
+            [seq],
+            return_tensors="pt",
+            add_special_tokens=False,
+        )
+        tokenized = {k: v.to(device) for k, v in tokenized.items()}
+    except Exception as e:
+        st.error(f"ESMFold tokenisation failed: {e}")
+        return _fallback_peptidebuilder(seq)
+
+    # ── 3. Run folding inference ───────────────────────────────────────────
+    with st.spinner("🔬 ESMFold is predicting structure… this may take 30–90 s"):
+        try:
+            with torch.no_grad():
+                output = model(**tokenized)
+        except Exception as e:
+            st.error(f"ESMFold inference failed: {e}")
+            return _fallback_peptidebuilder(seq)
+
+    # ── 4. Convert output → PDB text ──────────────────────────────────────
+    pdb_text = None
+    mean_plddt = None
+
+    # Try the canonical fair-esm helper first
+    try:
+        pdb_text, mean_plddt = _esmfold_to_pdb(output, tokenizer)
+    except Exception:
+        pass  # fall through to manual writer
+
+    # Fallback to our manual Cα writer
+    if pdb_text is None:
+        try:
+            pdb_text, mean_plddt = _manual_pdb_from_output(output, seq)
+        except Exception as e:
+            st.error(f"PDB conversion failed: {e}")
+            return _fallback_peptidebuilder(seq)
+
+    # ── 5. Save PDB to disk ───────────────────────────────────────────────
+    pdb_path = "predicted_peptide.pdb"
+    try:
+        with open(pdb_path, "w") as f:
+            f.write(pdb_text)
+    except Exception as e:
+        st.warning(f"Could not save PDB file: {e}")
+
+    # ── 6. Display pLDDT confidence ───────────────────────────────────────
+    if mean_plddt is not None:
+        _display_plddt(mean_plddt)
+
+    return pdb_text
+
+
+def _display_plddt(mean_plddt: float):
+    """
+    Show a colour-coded pLDDT confidence indicator in the Streamlit UI.
+
+    pLDDT interpretation (AlphaFold / ESMFold convention):
+        ≥ 90   Very high confidence — likely accurate
+        70–90  Confident
+        50–70  Low confidence — treat with caution
+        < 50   Very low confidence — likely disordered
+    """
+    if mean_plddt >= 90:
+        colour = "#27ae60"
+        label  = "Very high confidence"
+    elif mean_plddt >= 70:
+        colour = "#2980b9"
+        label  = "Confident"
+    elif mean_plddt >= 50:
+        colour = "#f39c12"
+        label  = "Low confidence"
+    else:
+        colour = "#c0392b"
+        label  = "Very low confidence"
+
+    st.markdown(
+        f"""
+        <div style="
+            border-left: 6px solid {colour};
+            padding: 12px 20px;
+            border-radius: 0 10px 10px 0;
+            background: {colour}18;
+            margin: 12px 0 20px 0;
+        ">
+            <span style="font-weight:700; font-size:15px; color:{colour};">
+                ESMFold pLDDT: {mean_plddt:.1f} / 100
+            </span>
+            &nbsp;&nbsp;
+            <span style="font-size:14px; opacity:0.85;">
+                {label}
+            </span>
+            <br>
+            <span style="font-size:12px; opacity:0.7;">
+                pLDDT is ESMFold's per-residue confidence score.
+                ≥90 = very reliable; 70–90 = good; 50–70 = use with caution; &lt;50 = likely disordered.
+            </span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _fallback_peptidebuilder(seq: str) -> str:
+    """
+    Emergency fallback: build an extended-chain PDB using PeptideBuilder.
+    Only used when ESMFold is unavailable.
+    """
+    try:
+        import PeptideBuilder
+        from PeptideBuilder import Geometry
+        from Bio.PDB import PDBIO
+
+        structure = PeptideBuilder.initialize_res(seq[0])
+        for aa in seq[1:]:
+            PeptideBuilder.add_residue(structure, Geometry.geometry(aa))
+
+        io = PDBIO()
+        io.set_structure(structure)
+        io.save("predicted_peptide.pdb")
+        with open("predicted_peptide.pdb") as f:
+            pdb_text = f.read()
+
+        st.info("ℹ️ Extended-chain structure generated via PeptideBuilder (no AI folding).")
+        return pdb_text
+
+    except Exception as e:
+        st.error(f"Both ESMFold and PeptideBuilder fallback failed: {e}")
+        return ""
+
+
+# ==========================================================
+# SECTION 8 - STRUCTURE ANALYSIS (UNCHANGED)
+# ==========================================================
 
 def show_structure(pdb_text):
     view = py3Dmol.view(width=800, height=450)
@@ -752,7 +1024,7 @@ def ca_rmsd(pdb_text):
 
 
 # ==========================================================
-# SECTION 8 - PLOT FUNCTIONS
+# SECTION 9 - PLOT FUNCTIONS (UNCHANGED)
 # ==========================================================
 
 def plot_pca(X, y_labels, class_names, title="PCA"):
@@ -988,7 +1260,7 @@ def plot_distance_map(dist_matrix, seq=""):
 
 
 # ==========================================================
-# SECTION 9 - STRUCTURAL ANALYSIS HELPER
+# SECTION 10 - STRUCTURAL ANALYSIS HELPER (UNCHANGED)
 # ==========================================================
 
 def render_structural_analysis(pdb_text, prefix="", seq=""):
@@ -1014,7 +1286,7 @@ def render_structural_analysis(pdb_text, prefix="", seq=""):
 
 
 # ==========================================================
-# SECTION 10 - MODEL TRAINING
+# SECTION 11 - MODEL TRAINING (UNCHANGED)
 # ==========================================================
 
 @st.cache_data
@@ -1075,7 +1347,7 @@ def train_models():
 
 
 # ==========================================================
-# SECTION 11 - LOAD MODELS
+# SECTION 12 - LOAD MODELS (UNCHANGED)
 # ==========================================================
 
 (
@@ -1086,7 +1358,7 @@ def train_models():
 
 
 # ==========================================================
-# SECTION 12 - PDF REPORT ENGINE
+# SECTION 13 - PDF REPORT ENGINE (UNCHANGED)
 # ==========================================================
 
 def generate_pdf(metrics, prediction, image_paths):
@@ -1126,7 +1398,7 @@ def generate_pdf(metrics, prediction, image_paths):
 
 
 # ==========================================================
-# SECTION 13 - HERO HEADER
+# SECTION 14 - HERO HEADER (UNCHANGED)
 # ==========================================================
 
 st.markdown("""
@@ -1135,13 +1407,14 @@ st.markdown("""
 <p>
 An integrated machine learning and structural bioinformatics platform
 for peptide taste, solubility, docking, and structural analysis.
+Powered by <strong>ESMFold</strong> for AI-based 3D structure prediction.
 </p>
 </div>
 """, unsafe_allow_html=True)
 
 
 # ==========================================================
-# SECTION 14 - MODE SELECTION
+# SECTION 15 - MODE SELECTION (UNCHANGED)
 # ==========================================================
 
 st.markdown("## 🔧 Prediction & Analysis Mode")
@@ -1164,7 +1437,7 @@ if "current_mode" not in st.session_state or st.session_state.current_mode != mo
 
 
 # ==========================================================
-# SECTION 15 - SINGLE PEPTIDE PREDICTION MODE
+# SECTION 16 - SINGLE PEPTIDE PREDICTION MODE (UNCHANGED)
 # ==========================================================
 
 if mode == "Single Peptide Prediction":
@@ -1218,22 +1491,25 @@ if mode == "Single Peptide Prediction":
 
             st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
             st.markdown("## 🧬 Predicted 3D Peptide Structure")
+
+            # ESMFold structure prediction (replaces PeptideBuilder)
             pdb_text = build_peptide_pdb(seq)
             st.session_state.pdb_text = pdb_text
 
-            st.download_button("⬇️ Download Predicted PDB", pdb_text,
-                               file_name="predicted_peptide.pdb")
-            st.components.v1.html(show_structure(pdb_text)._make_html(), height=520)
+            if pdb_text:
+                st.download_button("⬇️ Download Predicted PDB", pdb_text,
+                                   file_name="predicted_peptide.pdb")
+                st.components.v1.html(show_structure(pdb_text)._make_html(), height=520)
 
-            rmsd_val = ca_rmsd(pdb_text)
-            if rmsd_val is not None:
-                st.success(f"Cα RMSD: {rmsd_val:.3f} Å")
+                rmsd_val = ca_rmsd(pdb_text)
+                if rmsd_val is not None:
+                    st.success(f"Cα RMSD: {rmsd_val:.3f} Å")
 
-            render_structural_analysis(pdb_text, prefix="single_", seq=seq)
+                render_structural_analysis(pdb_text, prefix="single_", seq=seq)
 
 
 # ==========================================================
-# SECTION 16 - BATCH PEPTIDE PREDICTION MODE
+# SECTION 17 - BATCH PEPTIDE PREDICTION MODE (UNCHANGED)
 # ==========================================================
 
 elif mode == "Batch Peptide Prediction":
@@ -1265,7 +1541,7 @@ elif mode == "Batch Peptide Prediction":
 
 
 # ==========================================================
-# SECTION 17 - PDB UPLOAD & STRUCTURAL ANALYSIS MODE
+# SECTION 18 - PDB UPLOAD & STRUCTURAL ANALYSIS MODE (UNCHANGED)
 # ==========================================================
 
 elif mode == "PDB Upload & Structural Analysis":
@@ -1289,7 +1565,7 @@ elif mode == "PDB Upload & Structural Analysis":
 
 
 # ==========================================================
-# SECTION 18 - MODEL & DATASET ANALYTICS
+# SECTION 19 - MODEL & DATASET ANALYTICS (UNCHANGED)
 # ==========================================================
 
 if st.session_state.show_analytics:
@@ -1370,7 +1646,7 @@ if st.session_state.show_analytics:
 
 
 # ==========================================================
-# SECTION 19 - PDF DOWNLOAD
+# SECTION 20 - PDF DOWNLOAD (UNCHANGED)
 # ==========================================================
 
 if st.session_state.show_analytics and len(st.session_state.pdf_figures) > 0:
@@ -1387,13 +1663,13 @@ if st.session_state.show_analytics and len(st.session_state.pdf_figures) > 0:
 
 
 # ==========================================================
-# SECTION 20 - FOOTER (dynamic year)
+# SECTION 21 - FOOTER (UNCHANGED)
 # ==========================================================
 
 st.markdown(f"""
 <div class="footer">
 &copy; {date.today().year} &nbsp; <b>PepTastePredictor</b><br>
 An AI + Structural Bioinformatics platform for peptide analysis<br>
-For academic, educational, and research use
+ESMFold-powered 3D structure prediction &nbsp;|&nbsp; For academic, educational, and research use
 </div>
 """, unsafe_allow_html=True)
