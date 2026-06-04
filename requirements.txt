@@ -9,10 +9,8 @@ py3Dmol
 mdtraj
 openpyxl
 reportlab
-torch==2.1.2
-transformers==4.37.2
-accelerate==0.27.2
-fair-esm==2.0.0
-colabfold
-jax
-jaxlib
+
+torch
+transformers
+accelerate
+fair-esm
