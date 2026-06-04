@@ -1853,7 +1853,14 @@ def caption_plddt_v2(plddt_stats: dict, seq: str = "") -> str:
     )
     return (
         f"Per-residue pLDDT confidence profile"
-        f"{f' ({len(plddt_stats[\"mean\"] and seq or [])} residues)' if seq else ''}.<br><br>"
+        residue_count_text = ""
+
+        if seq:
+            residue_count_text = f" ({len(seq)} residues)"
+            caption = (
+                f"Mean pLDDT: {plddt_stats['mean']}"
+                f"{residue_count_text}.<br><br>"
+            )
         f"<strong>Mean pLDDT:</strong> <span style='color:{col}'>{plddt_stats['mean']:.1f} — {lbl}</span> | "
         f"<strong>Median:</strong> {plddt_stats['median']:.1f} | "
         f"<strong>Range:</strong> {plddt_stats['min']:.1f}–{plddt_stats['max']:.1f} | "
