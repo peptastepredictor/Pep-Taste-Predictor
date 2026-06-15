@@ -2,6 +2,8 @@
 # PepTastePredictor — app.py  (Hybrid Structural Engine v2)
 # Light + Dark Mode Compatible
 # Streamlit Cloud Compatible — No local ESMFold/GPU required
+# All bugs fixed: cmap, PDF, FASTA upload, 100aa limit,
+# memory overload, UI alignment, ESMFold labeling
 # ==========================================================
 
 # ==========================================================
@@ -10,6 +12,7 @@
 
 import os
 import io
+import gc
 import re
 import time
 import json
@@ -24,7 +27,10 @@ from pathlib import Path
 import streamlit as st
 import pandas as pd
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import seaborn as sns
 import py3Dmol
 
@@ -88,7 +94,7 @@ TASTE_EMOJI = {
     "Sour": "😮‍💨", "Umami": "🤤",
 }
 
-# ── Helix/Sheet propensity tables (Chou-Fasman) ────────────────────
+# ── Helix/Sheet propensity tables (Chou-Fasman) ─────────────────
 CF_HELIX = {
     "A": 1.42, "R": 0.98, "N": 0.67, "D": 1.01, "C": 0.70,
     "Q": 1.11, "E": 1.51, "G": 0.57, "H": 1.00, "I": 1.08,
@@ -109,13 +115,20 @@ THREE_LETTER = {
     "W":"TRP","Y":"TYR",
 }
 
-# AlphaFold Uniprot API base
 ALPHAFOLD_API = "https://alphafold.ebi.ac.uk/api/prediction/"
-# RCSB PDB search API
 RCSB_SEARCH   = "https://search.rcsb.org/rcsbsearch/v2/query"
 RCSB_FETCH    = "https://files.rcsb.org/download/{}.pdb"
-# ESMFold remote API (Meta / HuggingFace hosted)
 ESMFOLD_API   = "https://api.esmatlas.com/foldSequence/v1/pdb/"
+
+# ── FIX: safe colormap helper (replaces deprecated plt.cm.get_cmap) ──
+def _get_cmap(name, n=None):
+    try:
+        cmap = matplotlib.colormaps[name]
+    except Exception:
+        cmap = plt.cm.get_cmap(name)
+    if n is not None:
+        return cmap.resampled(n) if hasattr(cmap, "resampled") else cmap
+    return cmap
 
 
 # ==========================================================
@@ -124,11 +137,12 @@ ESMFOLD_API   = "https://api.esmatlas.com/foldSequence/v1/pdb/"
 
 st.markdown("""
 <style>
+/* ── Base text colours ── */
 .stApp p, .stApp span, .stApp label,
 .stApp li, .stApp h1, .stApp h2, .stApp h3,
 .stApp h4, .stApp h5, .stApp div { color: var(--text-color) !important; }
 .stMarkdown, .stMarkdown * { color: var(--text-color) !important; }
-h1, h2, h3, h4 { color: var(--text-color) !important; }
+h1,h2,h3,h4 { color: var(--text-color) !important; }
 div[data-testid="stRadio"] label,
 div[data-testid="stRadio"] label span,
 div[data-testid="stRadio"] label p { color: var(--text-color) !important; }
@@ -171,85 +185,179 @@ div[data-testid="stAlert"] p,
 div[data-testid="stAlert"] span { color: inherit !important; }
 div[data-testid="stTabs"] button p { color: var(--text-color) !important; }
 
+/* ── Hero banner ── */
 .hero {
     background: linear-gradient(135deg, #1f3c88 0%, #0b7285 60%, #12b886 100%);
-    padding: 40px 44px; border-radius: 20px; margin-bottom: 36px;
-    box-shadow: 0 8px 32px rgba(31,60,136,0.18);
+    padding: 44px 48px; border-radius: 22px; margin-bottom: 36px;
+    box-shadow: 0 8px 36px rgba(31,60,136,0.22);
 }
-.hero h1 { font-size: 2.4rem !important; font-weight: 800 !important;
-    margin-bottom: 10px; color: #ffffff !important; letter-spacing: -0.5px; }
-.hero p { font-size: 1.08rem !important; line-height: 1.8; color: #dce8ff !important; margin: 0; }
+.hero h1 { font-size: 2.6rem !important; font-weight: 800 !important;
+    margin-bottom: 12px; color: #ffffff !important; letter-spacing: -0.5px; }
+.hero p { font-size: 1.1rem !important; line-height: 1.9; color: #dce8ff !important; margin: 0; }
 
-.card { border: 1px solid rgba(128,128,180,0.3); padding: 28px 32px;
-    border-radius: 16px; margin-bottom: 28px; background: rgba(128,128,180,0.05);
-    box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+/* ── Info / Result cards ── */
+.card {
+    border: 1px solid rgba(128,128,180,0.3); padding: 28px 32px;
+    border-radius: 18px; margin-bottom: 24px;
+    background: rgba(128,128,180,0.05);
+    box-shadow: 0 2px 14px rgba(0,0,0,0.07);
+}
+.card-title {
+    font-size: 11px; font-weight: 800; text-transform: uppercase;
+    letter-spacing: 0.12em; opacity: 0.55; margin-bottom: 18px;
+    color: var(--text-color) !important;
+}
 
-.engine-badge { display: inline-flex; align-items: center; gap: 8px;
-    padding: 8px 18px; border-radius: 20px; font-size: 13px; font-weight: 700;
-    margin: 4px 4px 4px 0; }
-.badge-esm    { background: rgba(18,184,134,0.12); border: 1.5px solid rgba(18,184,134,0.4);  color: #12b886 !important; }
-.badge-af     { background: rgba(21,101,192,0.12); border: 1.5px solid rgba(21,101,192,0.4);  color: #1565C0 !important; }
-.badge-pdb    { background: rgba(255,152,0,0.12);  border: 1.5px solid rgba(255,152,0,0.4);   color: #e65100 !important; }
-.badge-fold   { background: rgba(103,58,183,0.12); border: 1.5px solid rgba(103,58,183,0.4);  color: #6a1b9a !important; }
-.badge-pb     { background: rgba(255,165,0,0.12);  border: 1.5px solid rgba(255,165,0,0.4);   color: #e67e22 !important; }
-.badge-gpu    { background: rgba(26,143,209,0.12); border: 1.5px solid rgba(26,143,209,0.4);  color: #1a8fd1 !important; }
-.badge-cpu    { background: rgba(128,128,180,0.12);border: 1.5px solid rgba(128,128,180,0.4); color: #888 !important; }
+/* ── Metric grid inside cards ── */
+.metric-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 20px;
+}
+.metric-box {
+    background: rgba(26,143,209,0.07);
+    border: 1px solid rgba(26,143,209,0.18);
+    border-radius: 12px; padding: 16px 20px;
+}
+.metric-box-label {
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.08em; opacity: 0.55; margin-bottom: 6px;
+    color: var(--text-color) !important;
+}
+.metric-box-value {
+    font-size: 22px; font-weight: 800; color: #1a8fd1 !important;
+}
+.metric-box-sub {
+    font-size: 11px; opacity: 0.55; margin-top: 3px;
+    color: var(--text-color) !important;
+}
 
+/* ── Engine badges ── */
+.engine-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 7px 16px; border-radius: 20px; font-size: 13px; font-weight: 700;
+    margin: 4px 4px 4px 0;
+}
+.badge-esm   { background:rgba(18,184,134,0.12); border:1.5px solid rgba(18,184,134,0.4); color:#12b886 !important; }
+.badge-af    { background:rgba(21,101,192,0.12); border:1.5px solid rgba(21,101,192,0.4); color:#1565C0 !important; }
+.badge-pdb   { background:rgba(255,152,0,0.12);  border:1.5px solid rgba(255,152,0,0.4);  color:#e65100 !important; }
+.badge-fold  { background:rgba(103,58,183,0.12); border:1.5px solid rgba(103,58,183,0.4); color:#6a1b9a !important; }
+.badge-pb    { background:rgba(255,165,0,0.12);  border:1.5px solid rgba(255,165,0,0.4);  color:#e67e22 !important; }
+
+/* ── Structure info panel ── */
 .struct-info-panel {
     border: 1px solid rgba(18,184,134,0.3);
-    border-radius: 14px; padding: 22px 28px; margin-bottom: 20px;
+    border-radius: 16px; padding: 24px 30px; margin-bottom: 22px;
     background: rgba(18,184,134,0.04);
 }
-.struct-info-panel h4 { font-size: 13px !important; font-weight: 700 !important;
-    text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.55;
-    margin: 0 0 16px 0; color: var(--text-color) !important; }
-.struct-row { display: flex; flex-wrap: wrap; gap: 28px; }
+.struct-info-panel h4 {
+    font-size: 12px !important; font-weight: 800 !important;
+    text-transform: uppercase; letter-spacing: 0.12em; opacity: 0.5;
+    margin: 0 0 18px 0; color: var(--text-color) !important;
+}
+.struct-row { display: flex; flex-wrap: wrap; gap: 28px; align-items: flex-start; }
 .struct-item { display: flex; flex-direction: column; }
-.struct-label { font-size: 11px; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 0.08em; opacity: 0.5; margin-bottom: 3px;
-    color: var(--text-color) !important; }
-.struct-value { font-size: 15px; font-weight: 700; color: #1a8fd1 !important; }
-.struct-value.green { color: #12b886 !important; }
+.struct-label {
+    font-size: 10px; font-weight: 800; text-transform: uppercase;
+    letter-spacing: 0.1em; opacity: 0.45; margin-bottom: 4px;
+    color: var(--text-color) !important;
+}
+.struct-value { font-size: 15px; font-weight: 800; color: #1a8fd1 !important; }
+.struct-value.green  { color: #12b886 !important; }
 .struct-value.orange { color: #e67e22 !important; }
 .struct-value.purple { color: #6a1b9a !important; }
 
-.ss-bar { display: flex; height: 16px; border-radius: 8px; overflow: hidden;
-    margin: 12px 0 6px; gap: 2px; }
-.ss-segment { height: 100%; border-radius: 3px; transition: width 0.4s ease; }
-.ss-legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 6px; }
-.ss-chip { display: inline-flex; align-items: center; gap: 6px;
-    font-size: 12px; font-weight: 600; color: var(--text-color) !important; }
-.ss-dot { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+/* ── SS bar ── */
+.ss-bar {
+    display: flex; height: 18px; border-radius: 9px; overflow: hidden;
+    margin: 14px 0 8px; gap: 2px;
+}
+.ss-segment { height: 100%; border-radius: 4px; }
+.ss-legend  { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 4px; }
+.ss-chip    { display:inline-flex; align-items:center; gap:7px;
+    font-size:12px; font-weight:700; color:var(--text-color) !important; }
+.ss-dot     { width:11px; height:11px; border-radius:3px; display:inline-block; }
 
-.plddt-legend { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 10px; }
-.plddt-chip { display: inline-flex; align-items: center; gap: 7px;
-    font-size: 13px; font-weight: 600; color: var(--text-color) !important; }
-.plddt-dot { width: 14px; height: 14px; border-radius: 50%; display: inline-block; }
+/* ── pLDDT legend ── */
+.plddt-legend { display:flex; gap:20px; flex-wrap:wrap; margin-top:10px; }
+.plddt-chip { display:inline-flex; align-items:center; gap:8px;
+    font-size:13px; font-weight:700; color:var(--text-color) !important; }
+.plddt-dot  { width:14px; height:14px; border-radius:50%; display:inline-block; }
 
-.metric-label { font-size: 12px !important; font-weight: 700 !important;
-    text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.6;
-    margin-bottom: 4px; margin-top: 18px; color: var(--text-color) !important; }
-.metric-label:first-child { margin-top: 0; }
-.metric-value { font-size: 24px !important; font-weight: 800 !important;
-    color: #1a8fd1 !important; margin-bottom: 2px; }
+/* ── ESMFold source banner ── */
+.esm-banner {
+    background: linear-gradient(90deg,rgba(18,184,134,0.12),rgba(18,184,134,0.04));
+    border: 1.5px solid rgba(18,184,134,0.35); border-radius: 12px;
+    padding: 14px 22px; margin: 14px 0 18px; display:flex; align-items:center; gap:14px;
+}
+.esm-banner-icon { font-size: 26px; }
+.esm-banner-text { font-size:14px; font-weight:600; color:#12b886 !important; }
+.esm-banner-sub  { font-size:12px; opacity:0.7; color:var(--text-color) !important; }
 
-.graph-caption { border-left: 5px solid #4a6fa5; border-radius: 0 10px 10px 0;
-    padding: 18px 24px; margin-top: 12px; margin-bottom: 40px;
-    font-size: 15px !important; line-height: 1.9; background: rgba(74,111,165,0.08);
-    color: var(--text-color) !important; }
-.graph-caption strong { font-weight: 700; color: var(--text-color) !important; }
-.graph-caption em { font-style: italic; color: var(--text-color) !important; opacity: 0.85; }
+/* ── Phys table ── */
+.phys-table {
+    width:100%; border-collapse:collapse; margin-top:8px;
+    font-size:14px;
+}
+.phys-table th {
+    background:rgba(31,60,136,0.1); color:var(--text-color) !important;
+    font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:0.08em;
+    padding:10px 14px; text-align:left; border-bottom:2px solid rgba(128,128,180,0.25);
+}
+.phys-table td {
+    padding:9px 14px; border-bottom:1px solid rgba(128,128,180,0.12);
+    color:var(--text-color) !important;
+}
+.phys-table tr:last-child td { border-bottom:none; }
+.phys-table td:nth-child(2) { font-weight:700; color:#1a8fd1 !important; }
 
-.section-gap { margin-top: 40px; margin-bottom: 6px; }
+/* ── Graph caption ── */
+.graph-caption {
+    border-left: 5px solid #4a6fa5; border-radius: 0 12px 12px 0;
+    padding: 18px 24px; margin-top: 10px; margin-bottom: 40px;
+    font-size: 14px !important; line-height: 1.9;
+    background: rgba(74,111,165,0.07); color: var(--text-color) !important;
+}
+.graph-caption strong { font-weight:700; color:var(--text-color) !important; }
+.graph-caption em     { font-style:italic; opacity:0.85; color:var(--text-color) !important; }
 
-.footer { text-align: center; font-size: 14px !important; padding: 44px 20px 20px;
-    margin-top: 60px; line-height: 2.2;
-    border-top: 1px solid rgba(128,128,180,0.25);
-    color: var(--text-color) !important; opacity: 0.7; }
+.section-gap { margin-top: 44px; margin-bottom: 6px; }
 
-@keyframes pulse { 0%{opacity:1;} 50%{opacity:0.5;} 100%{opacity:1;} }
-.live-indicator { display: inline-block; width: 8px; height: 8px;
-    background: #12b886; border-radius: 50%; animation: pulse 1.5s infinite; margin-right: 6px; }
+/* ── Download PDF card ── */
+.pdf-card {
+    background: linear-gradient(135deg,rgba(31,60,136,0.08),rgba(18,184,134,0.06));
+    border: 1.5px solid rgba(31,60,136,0.2); border-radius:18px;
+    padding:28px 36px; margin-top:32px; text-align:center;
+}
+.pdf-card h3 { font-size:1.3rem !important; font-weight:800 !important;
+    color:var(--text-color) !important; margin-bottom:8px; }
+.pdf-card p  { font-size:14px; opacity:0.65; color:var(--text-color) !important; }
+
+/* ── Metrics row ── */
+.metric-label {
+    font-size:11px !important; font-weight:800 !important;
+    text-transform:uppercase; letter-spacing:0.1em; opacity:0.55;
+    margin-bottom:4px; margin-top:18px; color:var(--text-color) !important;
+}
+.metric-label:first-child { margin-top:0; }
+.metric-value {
+    font-size:24px !important; font-weight:800 !important;
+    color:#1a8fd1 !important; margin-bottom:2px;
+}
+
+.footer {
+    text-align:center; font-size:13px !important; padding:44px 20px 20px;
+    margin-top:60px; line-height:2.4;
+    border-top:1px solid rgba(128,128,180,0.22);
+    color:var(--text-color) !important; opacity:0.7;
+}
+
+@keyframes pulse { 0%{opacity:1;} 50%{opacity:0.45;} 100%{opacity:1;} }
+.live-indicator {
+    display:inline-block; width:8px; height:8px;
+    background:#12b886; border-radius:50%;
+    animation:pulse 1.5s infinite; margin-right:6px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -263,12 +371,14 @@ if os.path.exists("logo.png"):
 
 st.sidebar.markdown("### 🧬 PepTastePredictor")
 st.sidebar.write("AI-driven peptide analysis platform")
-st.sidebar.write("• Taste prediction")
-st.sidebar.write("• Solubility prediction")
-st.sidebar.write("• Docking estimation")
-st.sidebar.write("• Structural bioinformatics")
-st.sidebar.write("• Hybrid Structure Engine v2")
-st.sidebar.write("• Batch screening + ZIP export")
+st.sidebar.markdown("""
+- 🎯 Taste prediction  
+- 💧 Solubility prediction  
+- 🔗 Docking estimation  
+- 🔬 Structural bioinformatics  
+- ⚙️ Hybrid Structure Engine v2  
+- 📦 Batch screening + ZIP export  
+""")
 st.sidebar.markdown("---")
 st.sidebar.markdown("**Structure Engine Priority:**")
 st.sidebar.markdown(
@@ -279,6 +389,7 @@ st.sidebar.markdown(
     '<div class="engine-badge badge-pb">⑤ PeptideBuilder</div>',
     unsafe_allow_html=True,
 )
+st.sidebar.markdown("---")
 st.sidebar.info("For academic & educational use only")
 
 
@@ -287,13 +398,14 @@ st.sidebar.info("For academic & educational use only")
 # ==========================================================
 
 _defaults = {
-    "initialized":     True,
-    "pdb_text":        None,
-    "pdb_source":      None,
-    "last_prediction": {},
-    "show_analytics":  False,
-    "pdf_figures":     [],
-    "current_mode":    None,
+    "initialized":      True,
+    "pdb_text":         None,
+    "pdb_source":       None,
+    "last_prediction":  {},
+    "show_analytics":   False,
+    "pdf_figures":      [],
+    "current_mode":     None,
+    "prediction_count": 0,
 }
 for _k, _v in _defaults.items():
     if _k not in st.session_state:
@@ -305,7 +417,9 @@ for _k, _v in _defaults.items():
 # ==========================================================
 
 def save_fig(fig, filename: str):
-    fig.savefig(filename, dpi=180, bbox_inches="tight")
+    fig.savefig(filename, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    gc.collect()
     if filename not in st.session_state.pdf_figures:
         st.session_state.pdf_figures.append(filename)
 
@@ -321,24 +435,57 @@ def clean_sequence(seq) -> str:
 
 
 def parse_fasta(text: str) -> list:
+    """Parse FASTA text. Returns list of (header, sequence) tuples."""
     records = []
     current_header = ""
     current_seq    = []
     for line in text.splitlines():
         line = line.strip()
+        if not line:
+            continue
         if line.startswith(">"):
             if current_seq:
-                records.append((current_header, clean_sequence("".join(current_seq))))
-            current_header = line[1:]
+                seq = clean_sequence("".join(current_seq))
+                if seq:
+                    records.append((current_header, seq))
+            current_header = line[1:].strip()
             current_seq    = []
         else:
             current_seq.append(line)
     if current_seq:
-        records.append((current_header, clean_sequence("".join(current_seq))))
-    return [(h, s) for h, s in records if s]
+        seq = clean_sequence("".join(current_seq))
+        if seq:
+            records.append((current_header, seq))
+    return records
 
 
+def read_uploaded_fasta(uploaded_file) -> list:
+    """
+    Safely read a FASTA uploaded file, trying multiple encodings.
+    Returns list of (header, seq) or empty list on failure.
+    """
+    if uploaded_file is None:
+        return []
+    raw = uploaded_file.read()
+    for enc in ("utf-8", "latin-1", "ascii"):
+        try:
+            text = raw.decode(enc)
+            records = parse_fasta(text)
+            if records:
+                return records
+            # If no FASTA headers found, treat entire content as plain sequence
+            seq = clean_sequence(text)
+            if seq:
+                return [("uploaded_sequence", seq)]
+            return []
+        except Exception:
+            continue
+    return []
+
+
+# ── FIX: full-sequence feature extraction (no 100aa cap) ────────
 def model_features(seq: str) -> dict:
+    """Extract 432 features from the FULL sequence (no length cap)."""
     L = len(seq)
     features = {"length": L}
     if L >= 2:
@@ -390,15 +537,15 @@ def physicochemical_features(seq: str) -> dict:
             h, t, s = ana.secondary_structure_fraction()
             return {
                 "Length":                L,
-                "Molecular weight (Da)": round(ana.molecular_weight(), 2),
-                "Isoelectric point":     round(ana.isoelectric_point(), 2),
-                "Net charge (pH 7)":     round(ana.charge_at_pH(7.0), 2),
+                "Molecular Weight (Da)": round(ana.molecular_weight(), 2),
+                "Isoelectric Point":     round(ana.isoelectric_point(), 2),
+                "Net Charge (pH 7)":     round(ana.charge_at_pH(7.0), 2),
                 "Aromaticity":           round(ana.aromaticity(), 3),
                 "GRAVY":                 round(ana.gravy(), 3),
-                "Instability index":     round(ana.instability_index(), 2),
-                "Helix fraction":        round(h, 3),
-                "Turn fraction":         round(t, 3),
-                "Sheet fraction":        round(s, 3),
+                "Instability Index":     round(ana.instability_index(), 2),
+                "Helix Fraction":        round(h, 3),
+                "Turn Fraction":         round(t, 3),
+                "Sheet Fraction":        round(s, 3),
             }
         except Exception:
             pass
@@ -457,6 +604,12 @@ def taste_emoji(taste: str) -> str:
 
 def show_caption(html_text: str):
     st.markdown(f'<div class="graph-caption">{html_text}</div>', unsafe_allow_html=True)
+
+
+def _close_all_figs():
+    """Close all open matplotlib figures to free memory."""
+    plt.close("all")
+    gc.collect()
 
 
 # ==========================================================
@@ -520,11 +673,9 @@ def _unlink(path: str):
 
 
 def _validate_pdb(pdb_text: str) -> bool:
-    """Return True only if PDB has ATOM records with CA atoms and finite coords."""
     if not pdb_text or not pdb_text.strip():
         return False
-    has_atom = False
-    has_ca   = False
+    has_atom = has_ca = False
     for line in pdb_text.splitlines():
         if not line.startswith("ATOM"):
             continue
@@ -532,9 +683,7 @@ def _validate_pdb(pdb_text: str) -> bool:
         if line[12:16].strip() == "CA":
             has_ca = True
             try:
-                x = float(line[30:38])
-                y = float(line[38:46])
-                z = float(line[46:54])
+                x, y, z = float(line[30:38]), float(line[38:46]), float(line[46:54])
                 if not (np.isfinite(x) and np.isfinite(y) and np.isfinite(z)):
                     return False
             except ValueError:
@@ -543,15 +692,11 @@ def _validate_pdb(pdb_text: str) -> bool:
 
 
 def _extract_plddt(pdb_text: str) -> list:
-    """Extract per-residue pLDDT from B-factor column (one value per residue)."""
-    seen = set()
-    vals = []
+    seen, vals = set(), []
     for line in pdb_text.splitlines():
         if not line.startswith("ATOM"):
             continue
-        chain   = line[21]
-        res_seq = line[22:26].strip()
-        key     = (chain, res_seq)
+        key = (line[21], line[22:26].strip())
         if key not in seen:
             seen.add(key)
             try:
@@ -565,8 +710,7 @@ def _count_residues_in_pdb(pdb_text: str) -> int:
     seen = set()
     for line in pdb_text.splitlines():
         if line.startswith("ATOM"):
-            key = (line[21], line[22:26].strip())
-            seen.add(key)
+            seen.add((line[21], line[22:26].strip()))
     return len(seen)
 
 
@@ -575,80 +719,55 @@ def _count_residues_in_pdb(pdb_text: str) -> int:
 # ==========================================================
 
 def predict_secondary_structure(seq: str) -> dict:
-    """
-    Lightweight Chou-Fasman-inspired secondary structure prediction.
-    Returns per-residue assignments and summary fractions.
-    """
     L = len(seq)
     if L == 0:
         return {"assignments": [], "helix_frac": 0, "sheet_frac": 0, "coil_frac": 1}
-
-    # Per-residue propensity scores
     helix_prop = [CF_HELIX.get(aa, 1.0) for aa in seq]
     sheet_prop = [CF_SHEET.get(aa, 1.0) for aa in seq]
-
     assignments = []
     for i in range(L):
-        # Window average (±2 residues)
-        lo = max(0, i - 2)
-        hi = min(L, i + 3)
+        lo, hi = max(0, i - 2), min(L, i + 3)
         h_avg = np.mean(helix_prop[lo:hi])
         s_avg = np.mean(sheet_prop[lo:hi])
-        # Pro breaks helix; Gly flexible
         if seq[i] == "P":
-            assignments.append("C")  # coil
+            assignments.append("C")
         elif h_avg >= 1.03 and h_avg >= s_avg:
-            assignments.append("H")  # helix
+            assignments.append("H")
         elif s_avg >= 1.05 and s_avg > h_avg:
-            assignments.append("E")  # sheet
+            assignments.append("E")
         else:
-            assignments.append("C")  # coil
-
-    # Smooth: short isolated stretches < 4 aa become coil
+            assignments.append("C")
     ss = list(assignments)
     for i in range(L):
         if ss[i] in ("H", "E"):
-            # find run length
             j = i
             while j < L and ss[j] == ss[i]:
                 j += 1
             if j - i < 4:
                 for k in range(i, j):
                     ss[k] = "C"
-
     counts = Counter(ss)
     total  = max(L, 1)
     return {
-        "assignments":  ss,
-        "helix_frac":   counts.get("H", 0) / total,
-        "sheet_frac":   counts.get("E", 0) / total,
-        "coil_frac":    counts.get("C", 0) / total,
+        "assignments": ss,
+        "helix_frac":  counts.get("H", 0) / total,
+        "sheet_frac":  counts.get("E", 0) / total,
+        "coil_frac":   counts.get("C", 0) / total,
     }
 
 
 def classify_fold(ss_result: dict, seq: str) -> str:
-    """Classify peptide fold type from SS composition."""
-    h = ss_result["helix_frac"]
-    e = ss_result["sheet_frac"]
-    L = len(seq)
-    if L <= 2:
-        return "Dipeptide / Residue"
+    h, e, L = ss_result["helix_frac"], ss_result["sheet_frac"], len(seq)
+    if L <= 2:  return "Dipeptide / Residue"
     if L <= 10:
-        if h > 0.5:
-            return "Short Helix"
-        if e > 0.3:
-            return "Beta-rich Peptide"
+        if h > 0.5: return "Short Helix"
+        if e > 0.3: return "Beta-rich Peptide"
         return "Short Peptide / Loop"
-    if h > 0.6:
-        return "All-α Helix"
-    if e > 0.5:
-        return "All-β Sheet"
-    if h > 0.3 and e > 0.2:
-        return "α/β Mixed"
-    if h > 0.4:
-        return "Predominantly α"
-    if e > 0.3:
-        return "Predominantly β"
+    if h > 0.6:             return "All-α Helix"
+    if e > 0.5:             return "All-β Sheet"
+    if h > 0.3 and e > 0.2: return "α/β Mixed"
+    if h > 0.4:             return "Predominantly α"
+    if e > 0.3:             return "Predominantly β"
     return "Disordered / Coil"
 
 
@@ -657,7 +776,6 @@ def classify_fold(ss_result: dict, seq: str) -> str:
 # ==========================================================
 
 def _http_get(url: str, timeout: int = 15) -> str:
-    """Simple HTTP GET returning text. Returns '' on any error."""
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "PepTastePredictor/2.0"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -666,68 +784,31 @@ def _http_get(url: str, timeout: int = 15) -> str:
         return ""
 
 
-def _http_post_json(url: str, payload: str, timeout: int = 60) -> str:
-    """HTTP POST with JSON/text payload. Returns '' on any error."""
-    try:
-        data = payload.encode("utf-8")
-        req  = urllib.request.Request(
-            url, data=data,
-            headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "User-Agent":   "PepTastePredictor/2.0",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read().decode("utf-8", errors="ignore")
-    except Exception:
-        return ""
-
-
-# ── Priority 1: AlphaFold DB lookup ───────────────────────────────
 @st.cache_data(show_spinner=False, ttl=3600)
 def _fetch_alphafold(seq: str) -> str:
-    """
-    Query AlphaFold EBI API by sequence hash.
-    Only works for sequences already in the AlphaFold database (Swiss-Prot).
-    Returns PDB text or ''.
-    """
-    # AlphaFold DB requires a UniProt accession, not raw sequence.
-    # We skip direct lookup for arbitrary sequences (not in DB).
-    # Instead, use only if seq matches known UniProt IDs (not applicable here).
-    # This stub returns '' — the AF check is done via RCSB title search below.
     return ""
 
 
-# ── Priority 2: RCSB PDB sequence search ──────────────────────────
 @st.cache_data(show_spinner=False, ttl=3600)
 def _fetch_rcsb_pdb(seq: str) -> str:
-    """
-    Search RCSB PDB for an identical or highly similar sequence entry.
-    Returns PDB text of the best hit, or ''.
-    """
     if len(seq) < 5:
         return ""
     query = {
         "query": {
-            "type": "terminal",
-            "service": "sequence",
+            "type": "terminal", "service": "sequence",
             "parameters": {
-                "evalue_cutoff": 1,
-                "identity_cutoff": 0.95,
-                "sequence_type": "protein",
-                "value": seq,
+                "evalue_cutoff": 1, "identity_cutoff": 0.95,
+                "sequence_type": "protein", "value": seq,
             },
         },
-        "request_options": {"results_verbosity": "compact", "sort": [
-            {"sort_by": "score", "direction": "desc"}]},
+        "request_options": {"results_verbosity": "compact",
+                            "sort": [{"sort_by": "score", "direction": "desc"}]},
         "return_type": "entry",
     }
     try:
         data = json.dumps(query).encode("utf-8")
         req  = urllib.request.Request(
-            RCSB_SEARCH,
-            data=data,
+            RCSB_SEARCH, data=data,
             headers={"Content-Type": "application/json", "User-Agent": "PepTastePredictor/2.0"},
             method="POST",
         )
@@ -746,25 +827,16 @@ def _fetch_rcsb_pdb(seq: str) -> str:
     return ""
 
 
-# ── Priority 3: Remote ESMFold API ────────────────────────────────
 @st.cache_data(show_spinner=False, ttl=3600)
 def _fetch_esmfold_remote(seq: str) -> str:
-    """
-    Call the ESM Atlas remote API (api.esmatlas.com).
-    Free, no key needed, Streamlit Cloud compatible.
-    Returns PDB text or ''.
-    """
     if len(seq) < 3 or len(seq) > 400:
         return ""
     try:
         data = seq.encode("utf-8")
         req  = urllib.request.Request(
-            ESMFOLD_API,
-            data=data,
-            headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "User-Agent":   "PepTastePredictor/2.0",
-            },
+            ESMFOLD_API, data=data,
+            headers={"Content-Type": "application/x-www-form-urlencoded",
+                     "User-Agent": "PepTastePredictor/2.0"},
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=60) as resp:
@@ -776,154 +848,73 @@ def _fetch_esmfold_remote(seq: str) -> str:
     return ""
 
 
-# ── Priority 4: Advanced Peptide Conformation Generator ───────────
 def _build_realistic_peptide(seq: str) -> str:
-    """
-    Build a biologically realistic peptide structure using SS prediction.
-    Assigns helix/sheet/coil backbone torsion angles per residue,
-    producing proper 3D conformations far superior to linear chains.
-
-    Returns PDB text string.
-    """
     ss_result = predict_secondary_structure(seq)
-    ss        = ss_result["assignments"]
-    L         = len(seq)
+    ss = ss_result["assignments"]
+    L  = len(seq)
+    CA_C, C_N, N_CA = 1.52, 1.33, 1.46
+    OMEGA = np.radians(180.0)
+    SS_ANGLES = {"H": (-57.0, -47.0), "E": (-120.0, 120.0), "C": (-60.0, 140.0)}
 
-    # Standard backbone bond lengths and angles
-    CA_C  = 1.52   # Å
-    C_N   = 1.33   # Å
-    N_CA  = 1.46   # Å
-    OMEGA = np.radians(180.0)  # planar peptide bond
-
-    # Backbone torsion angles by secondary structure type
-    # (phi, psi) in degrees → common idealized values
-    SS_ANGLES = {
-        "H": (-57.0, -47.0),   # α-helix
-        "E": (-120.0, 120.0),  # β-strand
-        "C": (-60.0, 140.0),   # coil / loop (type I turn-like)
-    }
-
-    def _rotation_matrix(axis: np.ndarray, angle: float) -> np.ndarray:
-        """Rodrigues rotation matrix."""
+    def _rotation_matrix(axis, angle):
         axis = axis / (np.linalg.norm(axis) + 1e-12)
         ca, sa = np.cos(angle), np.sin(angle)
         ux, uy, uz = axis
         return np.array([
-            [ca + ux*ux*(1-ca),    ux*uy*(1-ca)-uz*sa, ux*uz*(1-ca)+uy*sa],
-            [uy*ux*(1-ca)+uz*sa,   ca + uy*uy*(1-ca),  uy*uz*(1-ca)-ux*sa],
-            [uz*ux*(1-ca)-uy*sa,   uz*uy*(1-ca)+ux*sa, ca + uz*uz*(1-ca)],
+            [ca+ux*ux*(1-ca), ux*uy*(1-ca)-uz*sa, ux*uz*(1-ca)+uy*sa],
+            [uy*ux*(1-ca)+uz*sa, ca+uy*uy*(1-ca), uy*uz*(1-ca)-ux*sa],
+            [uz*ux*(1-ca)-uy*sa, uz*uy*(1-ca)+ux*sa, ca+uz*uz*(1-ca)],
         ])
 
     def _place_atom(p1, p2, p3, bond_len, angle_deg, dihedral_deg):
-        """
-        Place atom D given three existing atoms P1, P2, P3,
-        bond length P3–D, valence angle P2–P3–D (degrees),
-        and dihedral P1–P2–P3–D (degrees).
-        """
-        b1 = p3 - p2
-        b2 = p2 - p1
-        angle   = np.radians(angle_deg)
-        dihedral= np.radians(dihedral_deg)
-
+        b1 = p3 - p2; b2 = p2 - p1
+        angle    = np.radians(angle_deg)
+        dihedral = np.radians(dihedral_deg)
         b1n = b1 / (np.linalg.norm(b1) + 1e-12)
         b2n = b2 / (np.linalg.norm(b2) + 1e-12)
-
-        # Normal to plane p1-p2-p3
-        n  = np.cross(b2n, b1n)
-        nn = np.linalg.norm(n)
-        if nn < 1e-10:
-            n = np.array([0.0, 0.0, 1.0])
-        else:
-            n /= nn
-
-        # Rotate b1n by (pi - angle) around n to get direction
-        rot1 = _rotation_matrix(n, np.pi - angle)
+        n   = np.cross(b2n, b1n)
+        nn  = np.linalg.norm(n)
+        n   = n / nn if nn > 1e-10 else np.array([0., 0., 1.])
+        rot1  = _rotation_matrix(n, np.pi - angle)
         d_dir = rot1 @ b1n
-
-        # Rotate d_dir by dihedral around b1n
-        rot2 = _rotation_matrix(b1n, dihedral)
+        rot2  = _rotation_matrix(b1n, dihedral)
         d_dir = rot2 @ d_dir
-
         return p3 + bond_len * d_dir
 
-    # ── Build backbone atom positions ──────────────────────────
-    # Atom order: N, CA, C  per residue
-    # Standard bond angles
-    N_CA_C  = 111.2  # degrees
-    CA_C_N  = 116.2
-    C_N_CA  = 121.7
-
-    atoms = {}  # {(res_idx, atom_name): np.array([x,y,z])}
-
-    # Place first 3 atoms of residue 0 manually
-    atoms[(0, "N")]  = np.array([0.0, 0.0, 0.0])
-    atoms[(0, "CA")] = np.array([N_CA, 0.0, 0.0])
-
-    phi0, psi0 = SS_ANGLES.get(ss[0] if ss else "C", (-60.0, 140.0))
-    # Place C of residue 0
-    c0 = _place_atom(
-        np.array([-1.0, 0.0, 0.0]),  # dummy previous N
-        atoms[(0, "N")],
-        atoms[(0, "CA")],
-        CA_C, N_CA_C, psi0,
-    )
-    atoms[(0, "C")] = c0
+    N_CA_C, CA_C_N, C_N_CA = 111.2, 116.2, 121.7
+    atoms = {}
+    atoms[(0, "N")]  = np.array([0., 0., 0.])
+    atoms[(0, "CA")] = np.array([N_CA, 0., 0.])
+    phi0, psi0 = SS_ANGLES.get(ss[0] if ss else "C", (-60., 140.))
+    atoms[(0, "C")] = _place_atom(
+        np.array([-1., 0., 0.]), atoms[(0, "N")], atoms[(0, "CA")], CA_C, N_CA_C, psi0)
 
     for i in range(1, L):
-        phi_i, psi_i = SS_ANGLES.get(ss[i] if i < len(ss) else "C", (-60.0, 140.0))
-
-        # Nitrogen of residue i
-        n_i = _place_atom(
-            atoms[(i-1, "N")],
-            atoms[(i-1, "CA")],
-            atoms[(i-1, "C")],
-            C_N, CA_C_N, np.degrees(OMEGA),
-        )
+        phi_i, psi_i = SS_ANGLES.get(ss[i] if i < len(ss) else "C", (-60., 140.))
+        n_i  = _place_atom(atoms[(i-1,"N")], atoms[(i-1,"CA")], atoms[(i-1,"C")],
+                           C_N, CA_C_N, np.degrees(OMEGA))
         atoms[(i, "N")] = n_i
-
-        # CA of residue i
-        ca_i = _place_atom(
-            atoms[(i-1, "CA")],
-            atoms[(i-1, "C")],
-            n_i,
-            N_CA, C_N_CA, phi_i,
-        )
+        ca_i = _place_atom(atoms[(i-1,"CA")], atoms[(i-1,"C")], n_i, N_CA, C_N_CA, phi_i)
         atoms[(i, "CA")] = ca_i
+        c_i  = _place_atom(atoms[(i-1,"C")], n_i, ca_i, CA_C, N_CA_C, psi_i)
+        atoms[(i, "C")]  = c_i
 
-        # C of residue i
-        c_i = _place_atom(
-            atoms[(i-1, "C")],
-            n_i,
-            ca_i,
-            CA_C, N_CA_C, psi_i,
-        )
-        atoms[(i, "C")] = c_i
-
-    # ── Add CB atoms (all residues except Gly) ─────────────────
     for i in range(L):
         if seq[i] == "G":
             continue
-        n  = atoms[(i, "N")]
-        ca = atoms[(i, "CA")]
-        c  = atoms[(i, "C")]
-        # Standard CB placement: tetrahedral, ~1.52 Å, 110.5°
         try:
-            cb = _place_atom(c, n, ca, 1.52, 110.5, -122.5)
+            cb = _place_atom(atoms[(i,"C")], atoms[(i,"N")], atoms[(i,"CA")], 1.52, 110.5, -122.5)
             atoms[(i, "CB")] = cb
         except Exception:
             pass
 
-    # ── Write PDB ──────────────────────────────────────────────
     lines    = []
     atom_num = 1
     atom_order = ["N", "CA", "C", "CB"]
-
-    # Assign pLDDT-like B-factors based on SS (for coloring)
     SS_BFACTOR = {"H": 85.0, "E": 75.0, "C": 55.0}
-
     for i in range(L):
         resname = THREE_LETTER.get(seq[i], "UNK")
-        bf      = SS_BFACTOR.get(ss[i] if i < len(ss) else "C", 55.0)
+        bf = SS_BFACTOR.get(ss[i] if i < len(ss) else "C", 55.0)
         for aname in atom_order:
             if (i, aname) not in atoms:
                 continue
@@ -935,17 +926,14 @@ def _build_realistic_peptide(seq: str) -> str:
             lines.append(
                 f"ATOM  {atom_num:5d} {aname_fmt} {resname} A{i+1:4d}    "
                 f"{x:8.3f}{y:8.3f}{z:8.3f}  1.00{bf:6.2f}           "
-                f"{'C' if aname == 'CA' or aname == 'CB' or aname == 'C' else 'N'}"
+                f"{'C' if aname in ('CA','CB','C') else 'N'}"
             )
             atom_num += 1
-
     lines.append("END")
     return "\n".join(lines)
 
 
-# ── Priority 5: PeptideBuilder fallback ───────────────────────────
 def _build_geometric_pdb(seq: str) -> str:
-    """PeptideBuilder geometric fallback. Never raises."""
     try:
         structure = PeptideBuilder.initialize_res(seq[0])
         for aa in seq[1:]:
@@ -965,7 +953,6 @@ def _build_geometric_pdb(seq: str) -> str:
 
 
 def _minimal_single_residue_pdb(seq: str) -> str:
-    """Absolute last-resort: one CA per residue in a straight line."""
     lines = []
     for i, aa in enumerate(seq):
         resname = THREE_LETTER.get(aa, "UNK")
@@ -978,75 +965,46 @@ def _minimal_single_residue_pdb(seq: str) -> str:
     return "\n".join(lines)
 
 
-# ── Master Hybrid Engine ───────────────────────────────────────────
 def predict_structure(seq: str, use_remote: bool = True) -> tuple:
-    """
-    Hybrid engine — priority cascade:
-      1–2 aa  → Advanced peptide conformation generator
-      3–20 aa → CF folding engine → remote ESMFold (if enabled) → PeptideBuilder
-      >20 aa  → RCSB PDB search → remote ESMFold → CF folding engine → PeptideBuilder
-
-    Returns (pdb_text, engine_label, source_detail).
-    pdb_text is ALWAYS a valid non-empty PDB string.
-    """
     L = len(seq)
-
-    # ── Very short: 1–2 residues ──────────────────────────────
     if L <= 2:
         pdb = _build_realistic_peptide(seq)
-        if not pdb or not _validate_pdb(pdb):
-            pdb = _build_geometric_pdb(seq)
-        if not pdb or not _validate_pdb(pdb):
-            pdb = _minimal_single_residue_pdb(seq)
+        if not _validate_pdb(pdb): pdb = _build_geometric_pdb(seq)
+        if not _validate_pdb(pdb): pdb = _minimal_single_residue_pdb(seq)
         return pdb, "Peptide Conformation Engine", "Geometric (1–2 aa)"
 
-    # ── Short: 3–20 residues ──────────────────────────────────
     if L <= 20:
-        # Try advanced conformation generator first (fast, no network)
         pdb = _build_realistic_peptide(seq)
         if pdb and _validate_pdb(pdb):
-            engine = "Peptide Folding Engine"
-            source = "Chou-Fasman SS + backbone torsions"
-            # Optionally upgrade with remote ESMFold
             if use_remote:
                 esm_pdb = _fetch_esmfold_remote(seq)
                 if esm_pdb and _validate_pdb(esm_pdb):
-                    return esm_pdb, "Remote ESMFold", "ESM Atlas API"
-            return pdb, engine, source
-
-        # Fallback: PeptideBuilder
+                    return esm_pdb, "Remote ESMFold", "ESM Atlas API (Meta AI)"
+            return pdb, "Peptide Folding Engine", "Chou-Fasman SS + backbone torsions"
         pdb = _build_geometric_pdb(seq)
         if pdb and _validate_pdb(pdb):
             return pdb, "PeptideBuilder", "Geometric backbone"
-        pdb = _minimal_single_residue_pdb(seq)
-        return pdb, "PeptideBuilder (fallback)", "Linear chain"
+        return _minimal_single_residue_pdb(seq), "PeptideBuilder (fallback)", "Linear chain"
 
-    # ── Long: >20 residues ────────────────────────────────────
-    # Priority 1: RCSB PDB database search
     if use_remote:
         rcsb_pdb = _fetch_rcsb_pdb(seq)
         if rcsb_pdb and _validate_pdb(rcsb_pdb):
             return rcsb_pdb, "RCSB PDB Database", "Experimental / deposited structure"
 
-    # Priority 2: Remote ESMFold API
     if use_remote and L <= 400:
         esm_pdb = _fetch_esmfold_remote(seq)
         if esm_pdb and _validate_pdb(esm_pdb):
-            return esm_pdb, "Remote ESMFold", "ESM Atlas API (AI-predicted)"
+            return esm_pdb, "Remote ESMFold", "ESM Atlas API (Meta AI — AI-predicted)"
 
-    # Priority 3: Advanced folding engine
     pdb = _build_realistic_peptide(seq)
     if pdb and _validate_pdb(pdb):
         return pdb, "Peptide Folding Engine", "Chou-Fasman SS + backbone torsions"
 
-    # Priority 4: PeptideBuilder
     pdb = _build_geometric_pdb(seq)
     if pdb and _validate_pdb(pdb):
         return pdb, "PeptideBuilder", "Geometric backbone"
 
-    # Last resort
-    pdb = _minimal_single_residue_pdb(seq)
-    return pdb, "PeptideBuilder (fallback)", "Linear chain"
+    return _minimal_single_residue_pdb(seq), "PeptideBuilder (fallback)", "Linear chain"
 
 
 # ==========================================================
@@ -1054,77 +1012,95 @@ def predict_structure(seq: str, use_remote: bool = True) -> tuple:
 # ==========================================================
 
 def show_structure(pdb_text: str, use_plddt_colors: bool = False):
-    """Return a py3Dmol view with cartoon + VDW surface."""
     view = py3Dmol.view(width=1000, height=700)
     view.addModel(pdb_text, "pdb")
-
     plddt_vals = _extract_plddt(pdb_text)
     has_plddt  = len(plddt_vals) > 0 and max(plddt_vals) > 1.0
-
     if use_plddt_colors and has_plddt:
-        view.setStyle({"cartoon": {"colorscheme": {
-            "prop": "b",
-            "gradient": "roygb",
-            "min": 0, "max": 100,
-        }}})
+        view.setStyle({"cartoon": {"colorscheme": {"prop": "b", "gradient": "roygb", "min": 0, "max": 100}}})
     else:
         view.setStyle({"cartoon": {"color": "spectrum"}})
-
     view.addSurface(py3Dmol.VDW, {"opacity": 0.35})
     view.zoomTo()
     return view
 
 
+def render_esm_source_banner(engine_label: str, source_detail: str):
+    """Show a clear banner when structure is from ESMFold."""
+    if "ESMFold" in engine_label or "ESM" in engine_label:
+        st.markdown(f"""
+        <div class="esm-banner">
+          <div class="esm-banner-icon">🧬</div>
+          <div>
+            <div class="esm-banner-text">Structure predicted by Remote ESMFold (ESM Atlas · Meta AI Research)</div>
+            <div class="esm-banner-sub">
+              This 3D structure was generated using ESMFold — a protein language model trained on 
+              evolutionary sequence data. Per-residue confidence is shown as pLDDT scores 
+              (blue = high confidence, red = low confidence). Source: {source_detail}
+            </div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+    elif "RCSB" in engine_label:
+        st.markdown(f"""
+        <div class="esm-banner" style="background:linear-gradient(90deg,rgba(255,152,0,0.12),rgba(255,152,0,0.04));
+             border-color:rgba(255,152,0,0.4);">
+          <div class="esm-banner-icon">🗂️</div>
+          <div>
+            <div class="esm-banner-text" style="color:#e65100 !important;">
+              Experimentally determined structure from RCSB PDB
+            </div>
+            <div class="esm-banner-sub">Source: {source_detail}</div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+    elif "Folding" in engine_label or "Conformation" in engine_label:
+        st.markdown(f"""
+        <div class="esm-banner" style="background:linear-gradient(90deg,rgba(103,58,183,0.10),rgba(103,58,183,0.03));
+             border-color:rgba(103,58,183,0.35);">
+          <div class="esm-banner-icon">🔮</div>
+          <div>
+            <div class="esm-banner-text" style="color:#6a1b9a !important;">
+              Structure generated by Chou-Fasman Peptide Folding Engine
+            </div>
+            <div class="esm-banner-sub">
+              Secondary structure predicted via Chou-Fasman propensity tables; backbone torsion 
+              angles assigned per residue. Source: {source_detail}
+            </div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+
 def render_plddt_legend():
     st.markdown("""
     <div class="plddt-legend">
-      <div class="plddt-chip">
-        <span class="plddt-dot" style="background:#1565C0;"></span>Very high (pLDDT&nbsp;≥&nbsp;90)
-      </div>
-      <div class="plddt-chip">
-        <span class="plddt-dot" style="background:#40C4FF;"></span>Confident (70–90)
-      </div>
-      <div class="plddt-chip">
-        <span class="plddt-dot" style="background:#FFEB3B;"></span>Low (50–70)
-      </div>
-      <div class="plddt-chip">
-        <span class="plddt-dot" style="background:#FF7043;"></span>Very low (&lt;&nbsp;50)
-      </div>
+      <div class="plddt-chip"><span class="plddt-dot" style="background:#1565C0;"></span>Very high (pLDDT ≥ 90)</div>
+      <div class="plddt-chip"><span class="plddt-dot" style="background:#40C4FF;"></span>Confident (70–90)</div>
+      <div class="plddt-chip"><span class="plddt-dot" style="background:#FFEB3B;"></span>Low (50–70)</div>
+      <div class="plddt-chip"><span class="plddt-dot" style="background:#FF7043;"></span>Very low (&lt; 50)</div>
     </div>
     """, unsafe_allow_html=True)
 
 
-def render_structure_info_panel(
-    seq: str,
-    engine_label: str,
-    source_detail: str,
-    ss_result: dict,
-):
-    """Render the structure information panel with SS composition."""
+def render_structure_info_panel(seq, engine_label, source_detail, ss_result):
     fold_type = classify_fold(ss_result, seq)
     L         = len(seq)
     h_pct     = round(ss_result["helix_frac"] * 100, 1)
     e_pct     = round(ss_result["sheet_frac"] * 100, 1)
     c_pct     = round(ss_result["coil_frac"]  * 100, 1)
 
-    # Engine badge
-    if "ESMFold" in engine_label:
-        badge_cls = "badge-esm"
-        badge_icon = "🧬"
+    if "ESMFold" in engine_label or "ESM" in engine_label:
+        badge_cls, badge_icon = "badge-esm", "🧬"
     elif "RCSB" in engine_label or "PDB" in engine_label:
-        badge_cls = "badge-pdb"
-        badge_icon = "🗂️"
+        badge_cls, badge_icon = "badge-pdb", "🗂️"
     elif "AlphaFold" in engine_label:
-        badge_cls = "badge-af"
-        badge_icon = "🔵"
+        badge_cls, badge_icon = "badge-af", "🔵"
     elif "Folding" in engine_label or "Conformation" in engine_label:
-        badge_cls = "badge-fold"
-        badge_icon = "🔮"
+        badge_cls, badge_icon = "badge-fold", "🔮"
     else:
-        badge_cls = "badge-pb"
-        badge_icon = "⚙️"
+        badge_cls, badge_icon = "badge-pb", "⚙️"
 
-    # SS bar HTML
     ss_bar_html = ""
     if h_pct > 0:
         ss_bar_html += f'<div class="ss-segment" style="width:{h_pct}%;background:#e91e63;"></div>'
@@ -1138,7 +1114,7 @@ def render_structure_info_panel(
       <h4>🔬 Structure Information Panel</h4>
       <div class="struct-row">
         <div class="struct-item">
-          <span class="struct-label">Source</span>
+          <span class="struct-label">Source Engine</span>
           <span class="engine-badge {badge_cls}" style="margin:0;">{badge_icon} {engine_label}</span>
         </div>
         <div class="struct-item">
@@ -1154,7 +1130,7 @@ def render_structure_info_panel(
           <span class="struct-value purple">{fold_type}</span>
         </div>
       </div>
-      <div style="margin-top:18px;">
+      <div style="margin-top:20px;">
         <span class="struct-label">Secondary Structure Composition</span>
         <div class="ss-bar">{ss_bar_html}</div>
         <div class="ss-legend">
@@ -1190,7 +1166,7 @@ def ramachandran(pdb_text: str) -> list:
 
 
 def ca_distance_map(pdb_text: str) -> np.ndarray:
-    if not pdb_text or not pdb_text.strip():
+    if not pdb_text:
         return np.zeros((1, 1))
     tmp = _write_temp_pdb(pdb_text)
     try:
@@ -1209,7 +1185,7 @@ def ca_distance_map(pdb_text: str) -> np.ndarray:
 
 
 def ca_rmsd(pdb_text: str):
-    if not pdb_text or not pdb_text.strip():
+    if not pdb_text:
         return None
     tmp = _write_temp_pdb(pdb_text)
     try:
@@ -1226,21 +1202,24 @@ def ca_rmsd(pdb_text: str):
 
 
 # ==========================================================
-# SECTION 13 - PLOT FUNCTIONS
+# SECTION 13 - PLOT FUNCTIONS  (FIX: use _get_cmap)
 # ==========================================================
 
 def plot_pca(X, y_labels, class_names, title="PCA"):
-    C       = get_plot_colors()
-    pca     = PCA(n_components=2)
-    coords  = pca.fit_transform(X)
-    v1, v2  = pca.explained_variance_ratio_[:2] * 100
-    palette = plt.cm.get_cmap("tab20", len(class_names))
+    C      = get_plot_colors()
+    pca    = PCA(n_components=2)
+    coords = pca.fit_transform(X)
+    v1, v2 = pca.explained_variance_ratio_[:2] * 100
+    # FIX: use _get_cmap instead of plt.cm.get_cmap
+    palette = _get_cmap("tab20", len(class_names))
     fig, ax = plt.subplots(figsize=(9, 6))
     apply_plot_style(fig, [ax])
     for i, cls in enumerate(class_names):
         mask = y_labels == i
         ax.scatter(coords[mask, 0], coords[mask, 1],
-                   label=cls, alpha=0.75, s=35, color=palette(i), edgecolors="none")
+                   label=cls, alpha=0.75, s=35,
+                   color=palette(i / max(len(class_names) - 1, 1)),
+                   edgecolors="none")
     ax.set_xlabel(f"PC1 ({v1:.1f}%)", fontsize=12, labelpad=10)
     ax.set_ylabel(f"PC2 ({v2:.1f}%)", fontsize=12, labelpad=10)
     ax.set_title(title, fontsize=13, fontweight="bold", pad=12)
@@ -1266,8 +1245,7 @@ def plot_confusion(y_true, y_pred, class_names, title, cmap):
                 xticklabels=class_names, yticklabels=class_names,
                 ax=ax, linewidths=0.4, linecolor=C["grid"],
                 annot_kws={"size": 11, "color": annot_color})
-    ax.set_title(f"{title}  —  Accuracy: {acc*100:.1f}%",
-                 fontsize=14, fontweight="bold", pad=14)
+    ax.set_title(f"{title}  —  Accuracy: {acc*100:.1f}%", fontsize=14, fontweight="bold", pad=14)
     ax.set_xlabel("Predicted", fontsize=12, labelpad=10)
     ax.set_ylabel("True",      fontsize=12, labelpad=10)
     cbar = ax.collections[0].colorbar
@@ -1308,7 +1286,8 @@ def plot_feature_importance(model, feature_names, top_n=20):
         "Feature":    [prettify_feature(f) for f in feature_names],
         "Importance": model.feature_importances_,
     }).sort_values("Importance", ascending=False).head(top_n)
-    clrs = plt.cm.Blues(np.linspace(0.4, 0.9, len(imp))[::-1])
+    # FIX: use _get_cmap
+    clrs = _get_cmap("Blues")(np.linspace(0.4, 0.9, len(imp))[::-1])
     fig, ax = plt.subplots(figsize=(8, 7))
     apply_plot_style(fig, [ax])
     ax.barh(imp["Feature"][::-1], imp["Importance"][::-1], color=clrs, edgecolor=C["grid"])
@@ -1319,11 +1298,11 @@ def plot_feature_importance(model, feature_names, top_n=20):
 
 
 def plot_distributions(df):
-    C           = get_plot_colors()
-    seq_lengths = [len(s) for s in df["peptide"]]
+    C            = get_plot_colors()
+    seq_lengths  = [len(s) for s in df["peptide"]]
     taste_counts = df["taste"].value_counts()
-    grav_vals   = [gravy_score(s) for s in df["peptide"]]
-    fig, axes   = plt.subplots(1, 3, figsize=(16, 5))
+    grav_vals    = [gravy_score(s) for s in df["peptide"]]
+    fig, axes    = plt.subplots(1, 3, figsize=(16, 5))
     apply_plot_style(fig, axes)
     mean_len = np.mean(seq_lengths)
     axes[0].hist(seq_lengths, bins=20, color=C["accent1"], edgecolor=C["grid"], alpha=0.85)
@@ -1333,7 +1312,9 @@ def plot_distributions(df):
     leg0 = axes[0].legend(fontsize=9, facecolor=C["fig_bg"], edgecolor=C["grid"])
     for t in leg0.get_texts(): t.set_color(C["text"])
     n_cls = len(taste_counts)
-    bar_colors = plt.cm.get_cmap("tab20", n_cls)(np.linspace(0, 1, n_cls))
+    # FIX: use _get_cmap with safe normalisation
+    cmap_tab20  = _get_cmap("tab20")
+    bar_colors  = [cmap_tab20(i / max(n_cls - 1, 1)) for i in range(n_cls)]
     axes[1].barh(taste_counts.index, taste_counts.values, color=bar_colors, edgecolor=C["grid"])
     axes[1].set_xlabel("Count", fontsize=11)
     axes[1].set_title("Taste Class Distribution", fontsize=12, fontweight="bold", pad=10)
@@ -1352,7 +1333,7 @@ def plot_distributions(df):
 
 
 def plot_ramachandran(phi_psi):
-    C   = get_plot_colors()
+    C = get_plot_colors()
     fig, ax = plt.subplots(figsize=(6, 6))
     apply_plot_style(fig, [ax])
     ax.fill([-180,-180,-45,-45,-180], [-75,-45,-45,-75,-75], color="#4CAF50", alpha=0.25, label="α-helix")
@@ -1383,7 +1364,7 @@ def plot_distance_map(dist_matrix, seq=""):
         labels = [str(i + 1) for i in range(n)]
     tick_step   = max(1, n // 15)
     show_labels = [labels[i] if i % tick_step == 0 else "" for i in range(n)]
-    size        = max(5, n * 0.3 + 2)
+    size        = max(5, min(n * 0.3 + 2, 16))
     fig, ax     = plt.subplots(figsize=(size, size))
     apply_plot_style(fig, [ax])
     sns.heatmap(dist_matrix, cmap="viridis", ax=ax,
@@ -1402,52 +1383,42 @@ def plot_distance_map(dist_matrix, seq=""):
 
 
 def plot_plddt(plddt_vals, seq=""):
-    C   = get_plot_colors()
-    n   = len(plddt_vals)
+    C = get_plot_colors()
+    n = len(plddt_vals)
     bar_colors = [
-        "#1565C0" if v >= 90 else
-        "#40C4FF" if v >= 70 else
-        "#FFEB3B" if v >= 50 else
-        "#FF7043"
+        "#1565C0" if v >= 90 else "#40C4FF" if v >= 70 else "#FFEB3B" if v >= 50 else "#FF7043"
         for v in plddt_vals
     ]
-    fig, ax = plt.subplots(figsize=(max(8, n * 0.22), 4))
+    fig, ax = plt.subplots(figsize=(max(8, min(n * 0.22, 24)), 4))
     apply_plot_style(fig, [ax])
     ax.bar(range(n), plddt_vals, color=bar_colors, width=0.9)
     mean_pl = np.mean(plddt_vals)
     ax.axhline(mean_pl, color=C["orange"], linestyle="-.", lw=2, label=f"Mean = {mean_pl:.1f}")
-    for thresh, col, lbl in [(90,"#1565C0","Very high"), (70,"#40C4FF","Confident"),
-                              (50,"#FFEB3B","Low")]:
+    for thresh, col, lbl in [(90,"#1565C0","Very high"),(70,"#40C4FF","Confident"),(50,"#FFEB3B","Low")]:
         ax.axhline(thresh, color=col, linestyle="--", lw=1.0, alpha=0.6, label=f"{lbl} ({thresh})")
     ax.set_ylim(0, 105)
     ax.set_xlabel("Residue Index", fontsize=11, labelpad=8)
     ax.set_ylabel("pLDDT", fontsize=11, labelpad=8)
-    ax.set_title(f"Per-Residue pLDDT Confidence  (mean = {mean_pl:.1f})",
-                 fontsize=12, fontweight="bold", pad=12)
+    ax.set_title(f"Per-Residue pLDDT Confidence  (mean = {mean_pl:.1f})", fontsize=12, fontweight="bold", pad=12)
     if seq and len(seq) == n and n <= 60:
         ax.set_xticks(range(n))
         ax.set_xticklabels(list(seq), fontsize=8)
     leg = ax.legend(fontsize=8, loc="lower right", facecolor=C["fig_bg"], edgecolor=C["grid"])
-    for t in leg.get_texts():
-        t.set_color(C["text"])
+    for t in leg.get_texts(): t.set_color(C["text"])
     plt.tight_layout()
     return fig
 
 
 def plot_ss_composition(ss_result: dict, seq: str):
-    """Bar chart of per-residue secondary structure assignment."""
-    C   = get_plot_colors()
-    ss  = ss_result["assignments"]
-    n   = len(ss)
+    C  = get_plot_colors()
+    ss = ss_result["assignments"]
+    n  = len(ss)
     if n == 0:
         return None
     color_map = {"H": "#e91e63", "E": "#2196F3", "C": "#78909C"}
     bar_cols  = [color_map.get(s, "#888") for s in ss]
-
-    # Encode H=1, E=0.7, C=0.4 for height visual
-    heights = [1.0 if s == "H" else 0.7 if s == "E" else 0.4 for s in ss]
-
-    fig, ax = plt.subplots(figsize=(max(8, n * 0.22), 3))
+    heights   = [1.0 if s == "H" else 0.7 if s == "E" else 0.4 for s in ss]
+    fig, ax   = plt.subplots(figsize=(max(8, min(n * 0.22, 24)), 3))
     apply_plot_style(fig, [ax])
     ax.bar(range(n), heights, color=bar_cols, width=0.9, edgecolor="none")
     ax.set_ylim(0, 1.3)
@@ -1537,7 +1508,7 @@ def caption_feature_importance(model, feature_names, top_n=20):
     top3 = [(prettify_feature(r["Feature"]), r["Importance"]) for _, r in imp.head(3).iterrows()]
     n_d  = sum(1 for f in imp["Feature"] if f.startswith("DPC_"))
     n_a  = sum(1 for f in imp["Feature"] if f.startswith("AA_"))
-    note = ("Dipeptide context dominates." if n_d > n_a else "Single AA composition dominates.")
+    note = "Dipeptide context dominates." if n_d > n_a else "Single AA composition dominates."
     return (
         f"Top {top_n} features driving taste predictions.<br><br>"
         + "".join(f"<strong>#{i+1} — {n}</strong> (score: {s:.4f})<br>" for i, (n, s) in enumerate(top3))
@@ -1565,7 +1536,7 @@ def caption_ramachandran(phi_psi, seq=""):
     n_other = n_total - n_helix - n_sheet
     dominant = "α-helix" if n_helix >= n_sheet else "β-sheet"
     return (
-        f"Backbone torsion angles{f' for <strong>{seq}</strong>' if seq else ''}.<br><br>"
+        f"Backbone torsion angles{f' for <strong>{seq[:20]}</strong>' if seq else ''}.<br><br>"
         f"<strong>α-Helix region:</strong> {n_helix/n_total*100:.0f}% | "
         f"<strong>β-Sheet region:</strong> {n_sheet/n_total*100:.0f}% | "
         f"<strong>Outside allowed:</strong> {n_other/n_total*100:.0f}%<br><br>"
@@ -1585,7 +1556,7 @@ def caption_distance_map(dist_matrix, seq=""):
     return (
         f"Pairwise Cα–Cα distances — darker = closer.<br><br>"
         f"<strong>Range:</strong> {od.min():.1f}–{od.max():.1f} Å | "
-        f"<strong>Long-range contacts</strong> (|i−j|>3, d<8Å): {lr} — {fold}."
+        f"<strong>Long-range contacts</strong> (|i−j|>3, d&lt;8Å): {lr} — {fold}."
     )
 
 
@@ -1594,12 +1565,10 @@ def caption_distance_map(dist_matrix, seq=""):
 # ==========================================================
 
 def render_structural_analysis(pdb_text: str, prefix: str = "", seq: str = ""):
-    """Render Ramachandran + distance map + pLDDT + SS profile."""
     if not pdb_text or not pdb_text.strip():
         st.warning("No PDB data for structural analysis.")
         return
 
-    # SS composition chart (for locally-folded structures)
     if seq:
         ss_result = predict_secondary_structure(seq)
         if len(ss_result["assignments"]) >= 3:
@@ -1608,13 +1577,12 @@ def render_structural_analysis(pdb_text: str, prefix: str = "", seq: str = ""):
             fig_ss = plot_ss_composition(ss_result, seq)
             if fig_ss is not None:
                 save_fig(fig_ss, f"{prefix}ss_composition.png")
-                st.pyplot(fig_ss)
-                plt.close(fig_ss)
+                st.image(f"{prefix}ss_composition.png", use_column_width=True)
                 h_pct = round(ss_result["helix_frac"] * 100, 1)
                 e_pct = round(ss_result["sheet_frac"] * 100, 1)
                 c_pct = round(ss_result["coil_frac"]  * 100, 1)
                 show_caption(
-                    f"Chou-Fasman secondary structure prediction for <strong>{seq[:30]}{'…' if len(seq)>30 else ''}</strong>.<br><br>"
+                    f"Chou-Fasman SS prediction for <strong>{seq[:30]}{'…' if len(seq)>30 else ''}</strong>.<br><br>"
                     f"<strong>α-Helix:</strong> {h_pct}% &nbsp;|&nbsp; "
                     f"<strong>β-Sheet:</strong> {e_pct}% &nbsp;|&nbsp; "
                     f"<strong>Coil/Loop:</strong> {c_pct}%"
@@ -1627,8 +1595,7 @@ def render_structural_analysis(pdb_text: str, prefix: str = "", seq: str = ""):
         st.info("No φ/ψ angles — peptide needs ≥3 residues with complete backbone.")
     fig_rama = plot_ramachandran(phi_psi)
     save_fig(fig_rama, f"{prefix}ramachandran.png")
-    st.pyplot(fig_rama)
-    plt.close(fig_rama)
+    st.image(f"{prefix}ramachandran.png", use_column_width=True)
     show_caption(caption_ramachandran(phi_psi, seq=seq))
 
     st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
@@ -1636,11 +1603,9 @@ def render_structural_analysis(pdb_text: str, prefix: str = "", seq: str = ""):
     dist_map = ca_distance_map(pdb_text)
     fig_dist = plot_distance_map(dist_map, seq=seq)
     save_fig(fig_dist, f"{prefix}ca_distance_map.png")
-    st.pyplot(fig_dist)
-    plt.close(fig_dist)
+    st.image(f"{prefix}ca_distance_map.png", use_column_width=True)
     show_caption(caption_distance_map(dist_map, seq=seq))
 
-    # pLDDT section — only for ESMFold / AlphaFold structures
     plddt_vals = _extract_plddt(pdb_text)
     if plddt_vals and max(plddt_vals) > 1.0:
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
@@ -1648,23 +1613,24 @@ def render_structural_analysis(pdb_text: str, prefix: str = "", seq: str = ""):
         render_plddt_legend()
         fig_pl = plot_plddt(plddt_vals, seq=seq)
         save_fig(fig_pl, f"{prefix}plddt.png")
-        st.pyplot(fig_pl)
-        plt.close(fig_pl)
+        st.image(f"{prefix}plddt.png", use_column_width=True)
         mean_pl = np.mean(plddt_vals)
         quality = ("Very High" if mean_pl >= 90 else "High" if mean_pl >= 70 else
                    "Medium" if mean_pl >= 50 else "Low")
         show_caption(
-            f"Per-residue pLDDT confidence scores.<br><br>"
+            f"Per-residue pLDDT confidence scores (ESMFold / RCSB source).<br><br>"
             f"<strong>Mean pLDDT:</strong> {mean_pl:.1f} — <strong>{quality} confidence</strong>. "
-            f"Regions with pLDDT < 50 are likely intrinsically disordered or flexible."
+            f"Regions with pLDDT &lt; 50 are likely intrinsically disordered or flexible."
         )
+
+    _close_all_figs()
 
 
 # ==========================================================
 # SECTION 16 - MODEL TRAINING
 # ==========================================================
 
-@st.cache_data
+@st.cache_resource(show_spinner="Training models on dataset…")
 def train_models():
     if not os.path.exists(DATASET_PATH):
         st.error(f"Dataset not found: {DATASET_PATH}")
@@ -1731,73 +1697,91 @@ def train_models():
 
 
 # ==========================================================
-# SECTION 18 - PDF REPORT ENGINE
+# SECTION 18 - PDF REPORT ENGINE  (FIX: always creates file)
 # ==========================================================
 
-def generate_pdf(metrics: dict, prediction: dict, image_paths: list) -> str:
-    file_name = "PepTastePredictor_Report.pdf"
-    styles    = getSampleStyleSheet()
-    doc       = SimpleDocTemplate(file_name, pagesize=A4,
-                                  topMargin=40, bottomMargin=40,
-                                  leftMargin=50, rightMargin=50)
+def generate_pdf(metrics: dict, prediction: dict, image_paths: list) -> bytes:
+    """Generate PDF and return as bytes for st.download_button."""
+    buf    = io.BytesIO()
+    styles = getSampleStyleSheet()
+    doc    = SimpleDocTemplate(buf, pagesize=A4,
+                               topMargin=40, bottomMargin=40,
+                               leftMargin=50, rightMargin=50)
     story = []
     story.append(Paragraph("<b>PepTastePredictor — Analysis Report</b>", styles["Title"]))
     story.append(Spacer(1, 8))
     story.append(Paragraph(
-        "AI-driven peptide taste, solubility, docking & structural analysis platform. "
+        "AI-driven peptide taste, solubility, docking &amp; structural analysis platform. "
         "Hybrid Structural Engine v2 — Priority cascade: RCSB PDB → Remote ESMFold → "
         "Peptide Folding Engine → PeptideBuilder.",
         styles["Normal"]))
     story.append(Spacer(1, 14))
+
     story.append(Paragraph("<b>Model Performance</b>", styles["Heading2"]))
     tbl_data = [["Metric", "Value"]] + [[k, str(round(v, 4))] for k, v in metrics.items()]
     tbl = Table(tbl_data, colWidths=[280, 150])
     tbl.setStyle(TableStyle([
-        ("BACKGROUND",    (0, 0), (-1, 0),  rl_colors.HexColor("#1f3c88")),
-        ("TEXTCOLOR",     (0, 0), (-1, 0),  rl_colors.white),
-        ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
-        ("BACKGROUND",    (0, 1), (-1, -1), rl_colors.HexColor("#f0f4ff")),
-        ("ROWBACKGROUNDS",(0, 1), (-1, -1), [rl_colors.HexColor("#f0f4ff"), rl_colors.white]),
-        ("GRID",          (0, 0), (-1, -1), 0.5, rl_colors.HexColor("#cccccc")),
-        ("FONTSIZE",      (0, 1), (-1, -1), 10),
-        ("TOPPADDING",    (0, 0), (-1, -1), 6),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("BACKGROUND",     (0, 0), (-1, 0),  rl_colors.HexColor("#1f3c88")),
+        ("TEXTCOLOR",      (0, 0), (-1, 0),  rl_colors.white),
+        ("FONTNAME",       (0, 0), (-1, 0),  "Helvetica-Bold"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [rl_colors.HexColor("#f0f4ff"), rl_colors.white]),
+        ("GRID",           (0, 0), (-1, -1), 0.5, rl_colors.HexColor("#cccccc")),
+        ("FONTSIZE",       (0, 1), (-1, -1), 10),
+        ("TOPPADDING",     (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING",  (0, 0), (-1, -1), 6),
     ]))
     story.append(tbl)
     story.append(Spacer(1, 14))
+
     if prediction:
         story.append(Paragraph("<b>Prediction Results</b>", styles["Heading2"]))
-        for k, v in prediction.items():
-            story.append(Paragraph(f"<b>{k}:</b> {v}", styles["Normal"]))
+        pred_data = [["Property", "Value"]] + [[k, str(v)] for k, v in prediction.items()]
+        pred_tbl  = Table(pred_data, colWidths=[220, 210])
+        pred_tbl.setStyle(TableStyle([
+            ("BACKGROUND",     (0, 0), (-1, 0),  rl_colors.HexColor("#0b7285")),
+            ("TEXTCOLOR",      (0, 0), (-1, 0),  rl_colors.white),
+            ("FONTNAME",       (0, 0), (-1, 0),  "Helvetica-Bold"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [rl_colors.HexColor("#e8f8f5"), rl_colors.white]),
+            ("GRID",           (0, 0), (-1, -1), 0.5, rl_colors.HexColor("#cccccc")),
+            ("FONTSIZE",       (0, 1), (-1, -1), 10),
+            ("TOPPADDING",     (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING",  (0, 0), (-1, -1), 6),
+        ]))
+        story.append(pred_tbl)
         story.append(Spacer(1, 14))
+
     story.append(Paragraph("<b>Visual Analytics</b>", styles["Heading2"]))
     story.append(Spacer(1, 8))
     figure_titles = {
-        "distributions.png":           "Dataset Distributions",
-        "pca_overall.png":             "PCA Feature Space",
-        "confusion_taste.png":         "Taste Confusion Matrix",
-        "confusion_solubility.png":    "Solubility Confusion Matrix",
-        "feature_importance_taste.png":"Feature Importance",
-        "docking_scatter.png":         "Docking True vs Predicted",
-        "ss_composition.png":          "Secondary Structure Profile",
-        "ramachandran.png":            "Ramachandran Plot",
-        "ca_distance_map.png":         "Cα Distance Map",
-        "plddt.png":                   "pLDDT Confidence Profile",
+        "distributions":           "Dataset Distributions",
+        "pca_overall":             "PCA Feature Space",
+        "confusion_taste":         "Taste Confusion Matrix",
+        "confusion_solubility":    "Solubility Confusion Matrix",
+        "feature_importance_taste":"Feature Importance",
+        "docking_scatter":         "Docking True vs Predicted",
+        "ss_composition":          "Secondary Structure Profile",
+        "ramachandran":            "Ramachandran Plot",
+        "ca_distance_map":         "Cα Distance Map",
+        "plddt":                   "pLDDT Confidence Profile",
     }
     for img in image_paths:
-        if not os.path.exists(img):
+        if not img or not os.path.exists(img):
             continue
-        basename = os.path.basename(img)
+        basename = os.path.basename(img).replace(".png", "")
         title    = next((v for k, v in figure_titles.items() if k in basename), basename)
         story.append(Paragraph(f"<b>{title}</b>", styles["Heading3"]))
-        story.append(RLImage(img, width=430, height=270))
+        try:
+            story.append(RLImage(img, width=430, height=270))
+        except Exception:
+            pass
         story.append(Spacer(1, 20))
+
     story.append(Paragraph(
         f"<i>Generated by PepTastePredictor v2 · Hybrid Structural Engine · "
         f"{date.today().strftime('%d %B %Y')}</i>",
         styles["Normal"]))
     doc.build(story)
-    return file_name
+    return buf.getvalue()
 
 
 # ==========================================================
@@ -1811,8 +1795,8 @@ st.markdown("""
 An integrated machine learning &amp; structural bioinformatics platform for peptide
 taste, solubility, docking, and 3D structural analysis.<br>
 <strong>Hybrid Structural Engine v2:</strong>
-RCSB PDB Database &rarr; Remote ESMFold API &rarr; Chou-Fasman Peptide Folding Engine &rarr; PeptideBuilder fallback.
-Realistic helices, sheets &amp; loops for every sequence. Zero local GPU required.
+RCSB PDB Database → Remote ESMFold (Meta AI) → Chou-Fasman Peptide Folding Engine → PeptideBuilder fallback.<br>
+Realistic helices, sheets &amp; loops — full-sequence ML predictions — zero local GPU required.
 </p>
 </div>
 """, unsafe_allow_html=True)
@@ -1828,13 +1812,14 @@ mode = st.radio(
     ["Single Peptide Prediction", "Batch Peptide Prediction", "PDB Upload & Structural Analysis"],
     horizontal=True,
 )
-if "current_mode" not in st.session_state or st.session_state.current_mode != mode:
+if st.session_state.current_mode != mode:
     st.session_state.pdf_figures     = []
     st.session_state.show_analytics  = False
     st.session_state.last_prediction = {}
     st.session_state.pdb_text        = None
     st.session_state.pdb_source      = None
     st.session_state.current_mode    = mode
+    _close_all_figs()
 
 
 # ==========================================================
@@ -1845,28 +1830,26 @@ if mode == "Single Peptide Prediction":
 
     st.markdown("## 🔬 Single Peptide Prediction")
 
+    # ── FIX: FASTA file upload with robust reading ───────────────
     fasta_file = st.file_uploader(
-        "Upload a FASTA file (optional — overrides text input below)",
-        type=["fasta", "fa", "faa"],
+        "📂 Upload a FASTA file (optional — overrides text input below)",
+        type=["fasta", "fa", "faa", "txt"],
         key="single_fasta_upload",
     )
     fasta_seq = ""
     if fasta_file is not None:
-        try:
-            fasta_text = fasta_file.read().decode("utf-8")
-            records    = parse_fasta(fasta_text)
-            if records:
-                fasta_seq = records[0][1]
-                st.info(f"FASTA loaded: {records[0][0] or 'unnamed'} — {len(fasta_seq)} aa")
-            else:
-                st.error("No valid sequences found in FASTA file.")
-        except Exception as e:
-            st.error(f"Could not read FASTA: {e}")
+        records = read_uploaded_fasta(fasta_file)
+        if records:
+            fasta_seq = records[0][1]
+            st.success(f"✅ FASTA loaded: **{records[0][0] or 'unnamed'}** — {len(fasta_seq)} amino acids")
+        else:
+            st.error("❌ Could not extract a valid sequence from the uploaded file. "
+                     "Ensure it contains standard single-letter amino acid codes.")
 
     seq_raw = st.text_area(
         "Enter peptide sequence (FASTA or plain single-letter code)",
         value=fasta_seq,
-        help="Accepts 1–2500 amino acids. Single amino acids (A, G, W, …) are also valid.",
+        help="Accepts 1+ amino acids. All residues are used for ML predictions (no length cap).",
         placeholder="Paste sequence or FASTA here…",
         key="single_seq_input",
         height=100,
@@ -1875,12 +1858,12 @@ if mode == "Single Peptide Prediction":
 
     if seq:
         st.markdown(
-            f'<div style="font-size:13px;font-weight:600;opacity:0.6;margin-bottom:8px;">'
-            f'Valid amino acids: <span style="color:#12b886;font-weight:800;">{len(seq)}</span>'
+            f'<div style="font-size:13px;font-weight:700;opacity:0.65;margin-bottom:10px;">'
+            f'✔ Valid amino acids detected: '
+            f'<span style="color:#12b886;font-size:16px;font-weight:800;">{len(seq)}</span>'
             f'</div>',
             unsafe_allow_html=True)
 
-    # Remote toggle
     use_remote = st.checkbox(
         "🌐 Use remote structure databases (RCSB PDB + ESMFold API) — requires internet",
         value=True,
@@ -1888,79 +1871,86 @@ if mode == "Single Peptide Prediction":
     )
 
     if st.button("🚀 Run Prediction", type="primary"):
+        # Reset figures for new run
         st.session_state.pdf_figures = []
+        _close_all_figs()
 
         if len(seq) < 1:
             st.error("Please enter at least one amino acid.")
         else:
-            # ── ML Predictions ──────────────────────────────────
-            ml_seq = seq[:100]
-            Xp     = pd.DataFrame([model_features(ml_seq)])
-            taste  = le_taste.inverse_transform(taste_model.predict(Xp))[0]
-            sol    = le_sol.inverse_transform(sol_model.predict(Xp))[0]
-            dock   = dock_model.predict(Xp)[0]
-            emoji  = taste_emoji(taste)
+            # ── FIX: use FULL sequence for ML predictions ─────────
+            Xp    = pd.DataFrame([model_features(seq)])
+            taste = le_taste.inverse_transform(taste_model.predict(Xp))[0]
+            sol   = le_sol.inverse_transform(sol_model.predict(Xp))[0]
+            dock  = dock_model.predict(Xp)[0]
+            emoji = taste_emoji(taste)
 
-            sol_color  = "#12b886" if "soluble" in sol.lower() else "#e67e22"
-            dock_color = "#12b886" if dock < -6 else ("#f39c12" if dock < -4 else "#c0392b")
+            taste_proba = taste_model.predict_proba(Xp)[0]
+            sol_proba   = sol_model.predict_proba(Xp)[0]
 
+            sol_color   = "#12b886" if "soluble" in sol.lower() else "#e67e22"
+            dock_color  = "#12b886" if dock < -6 else ("#f39c12" if dock < -4 else "#c0392b")
+            dock_label  = "Strong binder" if dock < -6 else "Moderate binder" if dock < -4 else "Weak binder"
+
+            # ── ML result card ───────────────────────────────────
             st.markdown(f"""
             <div class="card">
-              <div style="font-size:12px;font-weight:700;opacity:0.5;text-transform:uppercase;
-                          letter-spacing:0.08em;margin-bottom:14px;">
+              <div class="card-title">
                 <span class="live-indicator"></span>ML Prediction Results
+                &nbsp;·&nbsp; Full sequence ({len(seq)} aa) used
               </div>
-              <div style="display:flex;gap:40px;flex-wrap:wrap;">
-                <div><div class="metric-label" style="margin-top:0;">Taste</div>
-                     <div class="metric-value">{emoji} {taste}</div></div>
-                <div><div class="metric-label" style="margin-top:0;">Solubility</div>
-                     <div class="metric-value" style="color:{sol_color} !important;">{sol}</div></div>
-                <div><div class="metric-label" style="margin-top:0;">Docking Score</div>
-                     <div class="metric-value" style="color:{dock_color} !important;">{dock:.3f} kcal/mol</div>
-                     <div style="font-size:11px;opacity:0.6;">
-                       {'Strong binder' if dock<-6 else 'Moderate binder' if dock<-4 else 'Weak binder'}
-                     </div></div>
+              <div class="metric-grid">
+                <div class="metric-box">
+                  <div class="metric-box-label">Taste</div>
+                  <div class="metric-box-value">{emoji} {taste}</div>
+                  <div class="metric-box-sub">Confidence: {max(taste_proba)*100:.1f}%</div>
+                </div>
+                <div class="metric-box">
+                  <div class="metric-box-label">Solubility</div>
+                  <div class="metric-box-value" style="color:{sol_color} !important;">{sol}</div>
+                  <div class="metric-box-sub">Confidence: {max(sol_proba)*100:.1f}%</div>
+                </div>
+                <div class="metric-box">
+                  <div class="metric-box-label">Docking Score</div>
+                  <div class="metric-box-value" style="color:{dock_color} !important;">{dock:.3f} kcal/mol</div>
+                  <div class="metric-box-sub">{dock_label}</div>
+                </div>
+                <div class="metric-box">
+                  <div class="metric-box-label">Sequence Length</div>
+                  <div class="metric-box-value">{len(seq)} aa</div>
+                  <div class="metric-box-sub">All residues used</div>
+                </div>
               </div>
             </div>
             """, unsafe_allow_html=True)
 
-            if len(seq) > 100:
-                st.info(f"ML predictions use first 100 aa of your {len(seq)}-aa sequence.")
-
-            taste_proba = taste_model.predict_proba(Xp)[0]
-            sol_proba   = sol_model.predict_proba(Xp)[0]
-            c1, c2 = st.columns(2)
-            c1.metric("Taste Confidence",      f"{max(taste_proba)*100:.1f}%")
-            c2.metric("Solubility Confidence", f"{max(sol_proba)*100:.1f}%")
-
-            # ── Physicochemical ─────────────────────────────────
+            # ── Physicochemical table ─────────────────────────────
             st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
             st.markdown("### 📌 Physicochemical Properties")
-            phys = physicochemical_features(ml_seq)
-            cols = st.columns(min(len(phys), 4))
-            for i, (k, v) in enumerate(phys.items()):
-                cols[i % len(cols)].metric(k, v)
+            phys = physicochemical_features(seq)
+            phys_rows = "".join(
+                f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in phys.items()
+            )
+            st.markdown(f"""
+            <div class="card" style="padding:20px 24px;">
+              <table class="phys-table">
+                <thead><tr><th>Property</th><th>Value</th></tr></thead>
+                <tbody>{phys_rows}</tbody>
+              </table>
+            </div>
+            """, unsafe_allow_html=True)
 
+            # ── Amino acid composition ───────────────────────────
             st.markdown("### 🧪 Amino Acid Composition")
-            comp      = composition_features(seq)
-            comp_cols = st.columns(len(comp))
+            comp = composition_features(seq)
+            cols = st.columns(len(comp))
             for i, (k, v) in enumerate(comp.items()):
-                comp_cols[i].metric(k, f"{v}%")
+                cols[i].metric(k, f"{v}%")
 
-            # ── Structure Generation (Hybrid Engine) ────────────
+            # ── Structure ─────────────────────────────────────────
             st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
             st.markdown("## 🧬 3D Peptide Structure")
 
-            engine_label  = ""
-            source_detail = ""
-
-            # Progress messages for each engine tier
-            spinner_msgs = {
-                "db":     "Searching RCSB PDB database…",
-                "esm":    "Querying remote ESMFold API…",
-                "fold":   "Running Peptide Folding Engine (Chou-Fasman)…",
-                "pb":     "Building geometric backbone…",
-            }
             with st.spinner("Generating 3D structure via Hybrid Engine…"):
                 pdb_text, engine_label, source_detail = predict_structure(
                     seq, use_remote=use_remote)
@@ -1968,13 +1958,12 @@ if mode == "Single Peptide Prediction":
             st.session_state.pdb_text   = pdb_text
             st.session_state.pdb_source = engine_label
 
-            # Compute SS for display
             ss_result = predict_secondary_structure(seq)
-
-            # Structure information panel
             render_structure_info_panel(seq, engine_label, source_detail, ss_result)
 
-            # 3D viewer
+            # ESMFold source banner
+            render_esm_source_banner(engine_label, source_detail)
+
             plddt_vals = _extract_plddt(pdb_text)
             use_plddt  = (plddt_vals and max(plddt_vals) > 1.0 and
                           ("ESMFold" in engine_label or "RCSB" in engine_label
@@ -1990,21 +1979,22 @@ if mode == "Single Peptide Prediction":
 
             rmsd_val = ca_rmsd(pdb_text)
             if rmsd_val is not None:
-                st.success(f"Cα RMSD from first residue: **{rmsd_val:.3f} Å**")
+                st.info(f"📏 Cα RMSD from first residue: **{rmsd_val:.3f} Å**")
 
-            st.download_button(
-                "⬇️ Download PDB",
-                pdb_text,
-                file_name=f"peptide_{seq[:20]}.pdb",
-                mime="text/plain",
-            )
+            col_dl1, col_dl2 = st.columns([1, 3])
+            with col_dl1:
+                st.download_button(
+                    "⬇️ Download PDB",
+                    pdb_text,
+                    file_name=f"peptide_{seq[:20]}.pdb",
+                    mime="text/plain",
+                )
 
-            # ── Structural Analysis ─────────────────────────────
             render_structural_analysis(pdb_text, prefix="single_", seq=seq)
 
-            # Save prediction for PDF / analytics
             st.session_state.last_prediction = {
                 "Sequence":                 seq[:60] + ("…" if len(seq) > 60 else ""),
+                "Full length (aa)":         len(seq),
                 "Predicted taste":          taste,
                 "Predicted solubility":     sol,
                 "Docking score (kcal/mol)": round(dock, 3),
@@ -2016,6 +2006,8 @@ if mode == "Single Peptide Prediction":
                 "β-Sheet fraction":         f"{ss_result['sheet_frac']*100:.1f}%",
             }
             st.session_state.show_analytics = True
+            st.session_state.prediction_count += 1
+            _close_all_figs()
 
 
 # ==========================================================
@@ -2028,19 +2020,22 @@ elif mode == "Batch Peptide Prediction":
 
     col_up1, col_up2 = st.columns(2)
     with col_up1:
-        batch_csv = st.file_uploader("Upload CSV (column: 'peptide')", type=["csv"])
+        batch_csv = st.file_uploader("📄 Upload CSV (column: 'peptide')", type=["csv"])
     with col_up2:
-        batch_fasta = st.file_uploader("Or upload FASTA file", type=["fasta", "fa", "faa"])
+        batch_fasta = st.file_uploader(
+            "📂 Or upload FASTA file",
+            type=["fasta", "fa", "faa", "txt"],
+            key="batch_fasta_upload",
+        )
 
-    gen_structures = st.checkbox(
-        "Generate 3D structures for each peptide (downloads as ZIP)",
+    gen_structures   = st.checkbox(
+        "🏗️ Generate 3D structures for each peptide (downloads as ZIP)",
         value=False,
-        help="Hybrid engine: RCSB → ESMFold → Folding Engine → PeptideBuilder. Slow for large batches.",
+        help="Hybrid engine cascade. Can be slow for large batches.",
     )
     batch_use_remote = st.checkbox("🌐 Use remote APIs for structure generation", value=True)
 
-    batch_df   = None
-    batch_seqs = []
+    batch_df, batch_seqs = None, []
 
     if batch_csv is not None:
         try:
@@ -2050,22 +2045,20 @@ elif mode == "Batch Peptide Prediction":
                 batch_df = None
             else:
                 batch_df["peptide"] = batch_df["peptide"].apply(clean_sequence)
-                batch_df = batch_df[batch_df["peptide"].str.len() >= 1].reset_index(drop=True)
+                batch_df   = batch_df[batch_df["peptide"].str.len() >= 1].reset_index(drop=True)
                 batch_seqs = batch_df["peptide"].tolist()
         except Exception as e:
             st.error(f"Could not read CSV: {e}")
 
     elif batch_fasta is not None:
-        try:
-            fasta_text = batch_fasta.read().decode("utf-8")
-            records    = parse_fasta(fasta_text)
-            if not records:
-                st.error("No valid sequences in FASTA.")
-            else:
-                batch_df   = pd.DataFrame(records, columns=["Header", "peptide"])
-                batch_seqs = batch_df["peptide"].tolist()
-        except Exception as e:
-            st.error(f"Could not read FASTA: {e}")
+        # FIX: use robust FASTA reader
+        records = read_uploaded_fasta(batch_fasta)
+        if not records:
+            st.error("No valid sequences found in the FASTA file.")
+        else:
+            batch_df   = pd.DataFrame(records, columns=["Header", "peptide"])
+            batch_seqs = batch_df["peptide"].tolist()
+            st.success(f"✅ Loaded {len(batch_seqs)} sequence(s) from FASTA")
 
     if batch_df is not None and batch_seqs:
         total    = len(batch_seqs)
@@ -2077,17 +2070,16 @@ elif mode == "Batch Peptide Prediction":
 
         for i, seq_b in enumerate(batch_seqs):
             try:
-                ml_seq = seq_b[:100]
-                Xr     = pd.DataFrame([model_features(ml_seq)])
-                t      = le_taste.inverse_transform(taste_model.predict(Xr))[0]
-                s      = le_sol.inverse_transform(sol_model.predict(Xr))[0]
-                d      = round(dock_model.predict(Xr)[0], 3)
-                tc     = round(max(taste_model.predict_proba(Xr)[0]) * 100, 1)
+                # FIX: use full sequence (no cap)
+                Xr = pd.DataFrame([model_features(seq_b)])
+                t  = le_taste.inverse_transform(taste_model.predict(Xr))[0]
+                s  = le_sol.inverse_transform(sol_model.predict(Xr))[0]
+                d  = round(dock_model.predict(Xr)[0], 3)
+                tc = round(max(taste_model.predict_proba(Xr)[0]) * 100, 1)
             except Exception:
                 t, s, d, tc = "Error", "Error", None, None
             tastes.append(t); sols.append(s); docks.append(d); taste_confs.append(tc)
 
-            # SS + fold type
             try:
                 ss_b = predict_secondary_structure(seq_b)
                 ft   = classify_fold(ss_b, seq_b)
@@ -2107,10 +2099,8 @@ elif mode == "Batch Peptide Prediction":
             else:
                 engines.append("—")
 
-            progress.progress(
-                min(int((i + 1) / total * 100), 100),
-                text=f"Processed {i+1}/{total}…",
-            )
+            progress.progress(min(int((i + 1) / total * 100), 100),
+                              text=f"Processed {i+1}/{total}…")
 
         progress.progress(100, text="Done!")
 
@@ -2123,6 +2113,7 @@ elif mode == "Batch Peptide Prediction":
 
         st.markdown("### ✅ Batch Results")
         st.dataframe(batch_df, use_container_width=True)
+
         st.download_button(
             "⬇️ Download Batch Predictions (CSV)",
             batch_df.to_csv(index=False),
@@ -2144,6 +2135,7 @@ elif mode == "Batch Peptide Prediction":
             )
 
         st.session_state.show_analytics = True
+        gc.collect()
 
 
 # ==========================================================
@@ -2166,7 +2158,7 @@ elif mode == "PDB Upload & Structural Analysis":
 
         if pdb_text and pdb_text.strip():
             if not _validate_pdb(pdb_text):
-                st.error("Uploaded PDB appears invalid (no ATOM records with Cα atoms). Please check the file.")
+                st.error("Uploaded PDB appears invalid (no ATOM records with Cα atoms).")
             else:
                 st.session_state.pdb_text       = pdb_text
                 st.session_state.pdb_source     = "Uploaded PDB"
@@ -2174,11 +2166,27 @@ elif mode == "PDB Upload & Structural Analysis":
 
                 n_atoms = sum(1 for l in pdb_text.splitlines() if l.startswith("ATOM"))
                 n_res   = _count_residues_in_pdb(pdb_text)
-                c1, c2 = st.columns(2)
-                c1.metric("ATOM records", n_atoms)
-                c2.metric("Residues",     n_res)
 
-                # Extract sequence from PDB
+                st.markdown(f"""
+                <div class="card">
+                  <div class="card-title">PDB File Summary</div>
+                  <div class="metric-grid">
+                    <div class="metric-box">
+                      <div class="metric-box-label">ATOM Records</div>
+                      <div class="metric-box-value">{n_atoms}</div>
+                    </div>
+                    <div class="metric-box">
+                      <div class="metric-box-label">Residues</div>
+                      <div class="metric-box-value">{n_res}</div>
+                    </div>
+                    <div class="metric-box">
+                      <div class="metric-box-label">File Name</div>
+                      <div class="metric-box-value" style="font-size:14px;">{uploaded_pdb.name}</div>
+                    </div>
+                  </div>
+                </div>
+                """, unsafe_allow_html=True)
+
                 seq_from_pdb = ""
                 seen_res = {}
                 ONE_LETTER = {v: k for k, v in THREE_LETTER.items()}
@@ -2195,7 +2203,6 @@ elif mode == "PDB Upload & Structural Analysis":
                 plddt_vals = _extract_plddt(pdb_text)
                 has_plddt  = plddt_vals and max(plddt_vals) > 1.0
 
-                # Structure info panel for uploaded PDB
                 if seq_from_pdb:
                     ss_result = predict_secondary_structure(seq_from_pdb)
                     render_structure_info_panel(
@@ -2211,7 +2218,7 @@ elif mode == "PDB Upload & Structural Analysis":
 
                 rmsd_val = ca_rmsd(pdb_text)
                 if rmsd_val is not None:
-                    st.success(f"Cα RMSD: **{rmsd_val:.3f} Å**")
+                    st.info(f"📏 Cα RMSD: **{rmsd_val:.3f} Å**")
 
                 render_structural_analysis(pdb_text, prefix="pdb_", seq=seq_from_pdb)
         else:
@@ -2228,23 +2235,47 @@ if st.session_state.show_analytics:
 
     with st.expander("📊 Model Performance & Dataset Analytics", expanded=False):
 
+        # ── Performance metrics ──────────────────────────────────
         st.markdown("### 📈 Model Performance Metrics")
-        mc = st.columns(3)
-        mc[0].metric("Taste Accuracy",      f"{metrics['Taste accuracy']*100:.1f}%")
-        mc[0].metric("Taste F1",            f"{metrics['Taste F1']:.3f}")
-        mc[1].metric("Solubility Accuracy", f"{metrics['Solubility accuracy']*100:.1f}%")
-        mc[1].metric("Solubility F1",       f"{metrics['Solubility F1']:.3f}")
-        mc[2].metric("Docking R²",          f"{metrics['Docking R2']:.3f}")
-        mc[2].metric("Docking RMSE",        f"{metrics['Docking RMSE']:.3f} kcal/mol")
+        st.markdown(f"""
+        <div class="metric-grid" style="margin-bottom:28px;">
+          <div class="metric-box">
+            <div class="metric-box-label">Taste Accuracy</div>
+            <div class="metric-box-value">{metrics['Taste accuracy']*100:.1f}%</div>
+          </div>
+          <div class="metric-box">
+            <div class="metric-box-label">Taste F1</div>
+            <div class="metric-box-value">{metrics['Taste F1']:.3f}</div>
+          </div>
+          <div class="metric-box">
+            <div class="metric-box-label">Solubility Accuracy</div>
+            <div class="metric-box-value">{metrics['Solubility accuracy']*100:.1f}%</div>
+          </div>
+          <div class="metric-box">
+            <div class="metric-box-label">Solubility F1</div>
+            <div class="metric-box-value">{metrics['Solubility F1']:.3f}</div>
+          </div>
+          <div class="metric-box">
+            <div class="metric-box-label">Docking R²</div>
+            <div class="metric-box-value">{metrics['Docking R2']:.3f}</div>
+          </div>
+          <div class="metric-box">
+            <div class="metric-box-label">Docking RMSE</div>
+            <div class="metric-box-value">{metrics['Docking RMSE']:.3f}</div>
+            <div class="metric-box-sub">kcal/mol</div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
 
+        # ── Dataset distributions ────────────────────────────────
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 📊 Dataset Distributions")
         fig_dist = plot_distributions(df_all)
         save_fig(fig_dist, "distributions.png")
-        st.pyplot(fig_dist)
-        plt.close(fig_dist)
+        st.image("distributions.png", use_column_width=True)
         show_caption(caption_distributions(df_all))
 
+        # ── PCA ──────────────────────────────────────────────────
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 🔹 PCA Feature Space")
         fig_pca, pca_model = plot_pca(
@@ -2252,63 +2283,82 @@ if st.session_state.show_analytics:
             title="PCA — Peptide Feature Space (by taste class)",
         )
         save_fig(fig_pca, "pca_overall.png")
-        st.pyplot(fig_pca)
-        plt.close(fig_pca)
+        st.image("pca_overall.png", use_column_width=True)
         show_caption(caption_pca(pca_model, le_taste.classes_))
 
+        # ── Taste confusion ──────────────────────────────────────
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 🔹 Taste Confusion Matrix")
         taste_preds  = taste_model.predict(X_test)
         fig_cm_taste = plot_confusion(yt_test, taste_preds, le_taste.classes_,
                                       "Taste Confusion Matrix", "Blues")
         save_fig(fig_cm_taste, "confusion_taste.png")
-        st.pyplot(fig_cm_taste)
-        plt.close(fig_cm_taste)
+        st.image("confusion_taste.png", use_column_width=True)
         show_caption(caption_confusion_taste(yt_test, taste_preds, le_taste.classes_))
 
+        # ── Solubility confusion ─────────────────────────────────
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 🔹 Solubility Confusion Matrix")
         sol_preds  = sol_model.predict(X_test)
         fig_cm_sol = plot_confusion(ys_test, sol_preds, le_sol.classes_,
                                     "Solubility Confusion Matrix", "Greens")
         save_fig(fig_cm_sol, "confusion_solubility.png")
-        st.pyplot(fig_cm_sol)
-        plt.close(fig_cm_sol)
+        st.image("confusion_solubility.png", use_column_width=True)
         show_caption(caption_confusion_sol(ys_test, sol_preds, le_sol.classes_))
 
+        # ── Feature importance ───────────────────────────────────
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 🔹 Feature Importance")
         fig_imp = plot_feature_importance(taste_model, X_all.columns, top_n=20)
         save_fig(fig_imp, "feature_importance_taste.png")
-        st.pyplot(fig_imp)
-        plt.close(fig_imp)
+        st.image("feature_importance_taste.png", use_column_width=True)
         show_caption(caption_feature_importance(taste_model, X_all.columns, top_n=20))
 
+        # ── Docking scatter ──────────────────────────────────────
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 🔹 Docking: True vs Predicted")
         dock_preds = dock_model.predict(X_test)
         fig_dock   = plot_docking(yd_test, dock_preds)
         save_fig(fig_dock, "docking_scatter.png")
-        st.pyplot(fig_dock)
-        plt.close(fig_dock)
+        st.image("docking_scatter.png", use_column_width=True)
         show_caption(caption_docking(yd_test, dock_preds))
 
+        _close_all_figs()
+
 
 # ==========================================================
-# SECTION 25 - PDF DOWNLOAD
+# SECTION 25 - PDF DOWNLOAD  (FIX: in-memory bytes, always shown)
 # ==========================================================
 
-if st.session_state.show_analytics and len(st.session_state.pdf_figures) > 0:
-    st.markdown("## 📄 Download Complete PDF Report")
-    pdf_path = generate_pdf(
-        metrics, st.session_state.last_prediction, st.session_state.pdf_figures)
-    if os.path.exists(pdf_path):
-        with open(pdf_path, "rb") as f:
-            st.download_button(
-                "📥 Download Full Analytics PDF", f,
-                file_name="PepTastePredictor_Report.pdf",
-                mime="application/pdf",
+if st.session_state.show_analytics:
+    st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
+    st.markdown("""
+    <div class="pdf-card">
+      <h3>📄 Download Complete Analysis Report</h3>
+      <p>Includes model performance metrics, prediction results, and all generated figures.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    figures_ready = [f for f in st.session_state.pdf_figures if f and os.path.exists(f)]
+
+    if figures_ready or st.session_state.last_prediction:
+        try:
+            pdf_bytes = generate_pdf(
+                metrics,
+                st.session_state.last_prediction,
+                figures_ready,
             )
+            st.download_button(
+                label="📥 Download Full Analytics PDF",
+                data=pdf_bytes,
+                file_name=f"PepTastePredictor_Report_{date.today().strftime('%Y%m%d')}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+        except Exception as e:
+            st.error(f"PDF generation failed: {e}")
+    else:
+        st.info("Run a prediction first to enable PDF download.")
 
 
 # ==========================================================
@@ -2318,8 +2368,8 @@ if st.session_state.show_analytics and len(st.session_state.pdf_figures) > 0:
 st.markdown(f"""
 <div class="footer">
 &copy; {date.today().year} &nbsp; <b>PepTastePredictor v2</b><br>
-AI + Structural Bioinformatics · Hybrid Structural Engine · Batch screening<br>
-Structure Priority: RCSB PDB → Remote ESMFold → Peptide Folding Engine → PeptideBuilder<br>
+AI + Structural Bioinformatics · Hybrid Structural Engine · Full-sequence ML predictions<br>
+Structure Priority: RCSB PDB → Remote ESMFold (Meta AI) → Chou-Fasman Folding Engine → PeptideBuilder<br>
 For academic, educational, and research use only
 </div>
 """, unsafe_allow_html=True)
