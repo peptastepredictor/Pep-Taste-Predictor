@@ -1081,10 +1081,10 @@ def ca_rmsd(pdb_text: str):
 @st.cache_data(show_spinner=False)
 def compute_shap_values(_model, _X_background, _X_query, feature_names):
     """
-    Compute SHAP values for a query sample using TreeExplainer.
-    _X_background: background dataset (subset of training data) as numpy array.
-    _X_query:      single-sample numpy array (1 x n_features).
-    Returns shap_values array for the predicted class.
+    Compute SHAP values using TreeExplainer with interventional perturbation.
+    Returns a list of arrays — one per class — each shaped (1, n_features).
+    Handles both the list-of-arrays format (shap < 0.42) and the 3-D ndarray
+    format introduced in newer shap releases transparently.
     """
     explainer = shap.TreeExplainer(
         _model,
@@ -1092,6 +1092,12 @@ def compute_shap_values(_model, _X_background, _X_query, feature_names):
         feature_perturbation="interventional",
     )
     sv = explainer.shap_values(_X_query)
+    # Normalise output to a list-of-arrays regardless of shap version
+    if isinstance(sv, np.ndarray):
+        if sv.ndim == 3:          # shape: (n_samples, n_features, n_classes)
+            sv = [sv[:, :, i] for i in range(sv.shape[2])]
+        elif sv.ndim == 2:        # binary edge case — mirror as two-class list
+            sv = [-sv, sv]
     return sv
 
 
@@ -1112,7 +1118,7 @@ def plot_shap_bar(shap_vals_class, feature_names, seq, predicted_class, top_n=15
 
     fig, ax = plt.subplots(figsize=(9, 6))
     apply_plot_style(fig, [ax])
-    bars = ax.barh(
+    ax.barh(
         df_sh["feature"][::-1],
         df_sh["shap_value"][::-1],
         color=colors[::-1],
@@ -1191,13 +1197,22 @@ def render_shap_analysis(taste_model, X_train_bg, X_query_df,
         try:
             shap_vals = compute_shap_values(
                 taste_model, X_bg_np, X_query_np, tuple(feature_names))
-            # shap_vals is list of arrays [class_0, class_1, ...], each (1, n_features)
-            sv_class = shap_vals[predicted_class_idx]
 
-            # Base value
+            # shap_vals is now a normalised list: one (1, n_features) array per class.
+            # Clamp the class index so it never exceeds the available arrays —
+            # this can happen when shap merges classes internally.
+            n_shap_classes = len(shap_vals)
+            safe_idx       = min(predicted_class_idx, n_shap_classes - 1)
+            sv_class       = shap_vals[safe_idx]
+
+            # Base value — handle scalar, list, or ndarray from different shap versions
             explainer  = shap.TreeExplainer(taste_model, data=X_bg_np,
                                             feature_perturbation="interventional")
-            base_value = explainer.expected_value[predicted_class_idx]
+            raw_ev = explainer.expected_value
+            if isinstance(raw_ev, (list, np.ndarray)):
+                base_value = float(raw_ev[min(safe_idx, len(raw_ev) - 1)])
+            else:
+                base_value = float(raw_ev)
 
             # Bar chart
             fig_bar = plot_shap_bar(sv_class, feature_names, seq, predicted_class)
@@ -1211,7 +1226,7 @@ def render_shap_analysis(taste_model, X_train_bg, X_query_df,
             }).sort_values("abs", ascending=False).head(3)
             top3_html = "".join(
                 f"<strong>#{i+1} {r['feature']}</strong> (SHAP={r['shap']:+.4f})<br>"
-                for i, (_, r) in enumerate(top3_features.iterrows())
+                for i, (_, r) in enumerate(top_features.iterrows())
             ) if not top_features.empty else ""
 
             show_caption(
@@ -1615,19 +1630,71 @@ def caption_ramachandran(phi_psi, seq=""):
 
 
 def caption_distance_map(dist_matrix, seq=""):
+    """
+    Generate a plain-language interpretation of the Cα distance map,
+    suitable for a research paper figure legend.
+    """
     n = dist_matrix.shape[0]
     if n < 2:
-        return "Distance map unavailable — fewer than 2 Cα atoms."
-    mask = ~np.eye(n, dtype=bool)
-    od   = dist_matrix[mask]
-    lr   = sum(1 for i in range(n) for j in range(n)
-               if abs(i-j) > 3 and dist_matrix[i,j] < 8.0)
-    fold = ("suggesting the peptide <strong>folds back on itself</strong>"
-            if lr > 0 else "consistent with an <strong>extended conformation</strong>")
+        return "Distance map unavailable — structure contains fewer than 2 Cα atoms."
+
+    mask   = ~np.eye(n, dtype=bool)
+    od     = dist_matrix[mask]
+    d_min  = od.min()
+    d_max  = od.max()
+    d_mean = od.mean()
+
+    # Mean sequential bond distance (adjacent residues, ideal ~3.8 Å)
+    sequential = [dist_matrix[i, i + 1] for i in range(n - 1)]
+    mean_seq   = float(np.mean(sequential)) if sequential else 3.8
+
+    # Long-range contacts: residues separated by >3 positions but within 8 Å spatially
+    lr_pairs = [(i, j)
+                for i in range(n)
+                for j in range(i + 4, n)
+                if dist_matrix[i, j] < 8.0]
+    n_lr = len(lr_pairs)
+
+    # Short-range contacts (|i-j| = 2 or 3) reflect turns and loops
+    n_sr = sum(1 for i in range(n) for j in range(n)
+               if 1 < abs(i - j) <= 3 and dist_matrix[i, j] < 7.0)
+
+    max_possible_lr = max(1, (n - 3) * (n - 4) // 2)
+    contact_density = n_lr / max_possible_lr
+
+    if contact_density > 0.25:
+        shape_note = ("The high density of long-range contacts indicates a "
+                      "<strong>compact, globular-like fold</strong> with substantial "
+                      "tertiary packing between distant residues.")
+    elif n_lr > 0:
+        shape_note = ("The moderate number of long-range contacts suggests the peptide "
+                      "<strong>partially folds back on itself</strong>, forming a loose "
+                      "tertiary arrangement.")
+    else:
+        shape_note = ("The absence of long-range contacts is consistent with an "
+                      "<strong>extended or fully disordered conformation</strong>, "
+                      "typical of short linear peptides in solution.")
+
+    seq_note = (f"Sequence <strong>{seq[:20]}{'…' if len(seq) > 20 else ''}</strong> "
+                f"({n} residues). ") if seq else ""
+
     return (
-        f"Pairwise Cα–Cα distances — darker = closer.<br><br>"
-        f"<strong>Range:</strong> {od.min():.1f}–{od.max():.1f} Å | "
-        f"<strong>Long-range contacts</strong> (|i−j|>3, d&lt;8Å): {lr} — {fold}."
+        f"{seq_note}"
+        f"The heatmap displays pairwise Cα–Cα Euclidean distances (Å) between every "
+        f"residue pair in the peptide backbone. "
+        f"<strong>Dark cells indicate close spatial proximity; bright cells indicate "
+        f"greater separation.</strong> "
+        f"The main diagonal (distance = 0 Å, each residue to itself) always appears "
+        f"as the darkest stripe.<br><br>"
+        f"<strong>Distance range:</strong> {d_min:.1f}–{d_max:.1f} Å "
+        f"(mean {d_mean:.1f} Å across all pairs).<br>"
+        f"<strong>Mean sequential Cα–Cα distance</strong> (adjacent residues): "
+        f"{mean_seq:.2f} Å — the expected value for ideal backbone geometry is ~3.8 Å.<br>"
+        f"<strong>Short-range contacts</strong> (|i−j| = 2–3, d &lt; 7 Å): {n_sr} "
+        f"— characteristic of turns and loop regions in the backbone.<br>"
+        f"<strong>Long-range contacts</strong> (|i−j| &gt; 3, d &lt; 8 Å): {n_lr} "
+        f"(contact density: {contact_density * 100:.1f}% of all possible distant pairs).<br><br>"
+        f"{shape_note}"
     )
 
 
