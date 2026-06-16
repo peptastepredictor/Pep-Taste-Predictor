@@ -2133,11 +2133,13 @@ if mode == "Single Peptide Prediction":
               </div>
             </div>""", unsafe_allow_html=True)
 
-            # Taste probability breakdown — shows all 6 classes
+            # Taste probability breakdown — always show all known taste classes.
             st.markdown("#### Taste Class Probabilities")
+            full_taste_proba = np.zeros(len(le_taste.classes_), dtype=float)
+            full_taste_proba[taste_model.classes_.astype(int)] = taste_proba
             prob_df = pd.DataFrame({
                 "Taste Class": le_taste.classes_,
-                "Probability": [f"{p*100:.1f}%" for p in taste_proba],
+                "Probability": [f"{p*100:.1f}%" for p in full_taste_proba],
             })
             st.dataframe(prob_df, use_container_width=True, hide_index=True)
 
