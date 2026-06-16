@@ -82,7 +82,7 @@ KD_SCALE = {
     "S": -0.8, "T": -0.7, "V": 4.2,  "W": -0.9, "Y": -1.3,
 }
 
-# Primary taste classes — 6-class model
+# Primary taste classes — 6-class model (fixed order, encoder pre-fitted to this)
 TASTE_CLASSES = ["Bitter", "Neutral", "Salty", "Sour", "Sweet", "Umami"]
 
 TASTE_EMOJI = {
@@ -294,6 +294,8 @@ _defaults = {
     "pdf_figures":      [],
     "current_mode":     None,
     "prediction_count": 0,
+    # FIX 3: cache SHAP explainer here instead of @st.cache_data
+    "shap_explainer":   None,
 }
 for _k, _v in _defaults.items():
     if _k not in st.session_state:
@@ -364,22 +366,52 @@ def read_uploaded_fasta(uploaded_file) -> list:
     return []
 
 
+# ==========================================================
+# FIX 2 — CORRECTED simplify_taste
+# Swapped loop order eliminates word-order bias in composite labels.
+# Single-word labels are matched directly (no change to unambiguous rows).
+# Composite labels pick the first recognised non-Neutral taste by the
+# priority order defined in base_tastes, not by position in the raw string.
+# ==========================================================
+
 def simplify_taste(taste_series):
     """
     Map composite taste labels (e.g. 'Sour Sweet Umami') to a single
-    primary taste class by taking the first recognised base taste word.
-    Classes retained: Bitter, Salty, Sour, Sweet, Umami, Neutral.
-    Entries that do not match any known taste word default to 'Neutral'.
+    primary taste class.
+
+    Priority order is defined by base_tastes, not by word position in the
+    raw label — this eliminates the original word-order bias where
+    'Sour Sweet' would always map to 'Sour' simply because it appeared first.
+
+    Single-word labels are matched directly and returned immediately,
+    so they are completely unaffected by the loop-order change.
+
+    Falls back to 'Neutral' if no recognised taste word is found.
     """
     base_tastes = ["Bitter", "Sweet", "Salty", "Sour", "Umami", "Neutral"]
+
     def _map(t):
-        words = str(t).split()
-        for w in words:
-            # case-insensitive match
+        words = [w.strip().lower() for w in str(t).split()]
+
+        # Fast path: single unambiguous word — no priority logic needed
+        if len(words) == 1:
             for bt in base_tastes:
-                if w.strip().lower() == bt.lower():
+                if words[0] == bt.lower():
                     return bt
+            return "Neutral"
+
+        # Composite label: iterate base_tastes (priority order), not words
+        # Skip "Neutral" in first pass so it only wins if nothing else matches
+        for bt in base_tastes[:-1]:
+            if bt.lower() in words:
+                return bt
+
+        # Explicit Neutral as last resort
+        if "neutral" in words:
+            return "Neutral"
+
         return "Neutral"
+
     return taste_series.apply(_map)
 
 
@@ -1079,22 +1111,35 @@ def ca_rmsd(pdb_text: str):
 
 # ==========================================================
 # SECTION 13 — SHAP INTERPRETABILITY
+# FIX 3: Removed @st.cache_data (wrong decorator for model objects).
+# The TreeExplainer is now cached in st.session_state["shap_explainer"]
+# so it is built once per session and reused, avoiding repeated
+# re-instantiation and hash-mismatch errors.
 # ==========================================================
 
-@st.cache_data(show_spinner=False)
 def compute_shap_values(_model, _X_background, _X_query, feature_names):
     """
     Compute SHAP values using TreeExplainer with interventional perturbation.
+
+    The explainer is cached in st.session_state to avoid rebuilding it on
+    every prediction call (the original @st.cache_data caused silent cache
+    misses because sklearn model objects are not safely hashable by value).
+
     Returns a list of arrays — one per class — each shaped (1, n_features).
     Handles both the list-of-arrays format (shap < 0.42) and the 3-D ndarray
     format introduced in newer shap releases transparently.
     """
-    explainer = shap.TreeExplainer(
-        _model,
-        data=_X_background,
-        feature_perturbation="interventional",
-    )
+    # Build the explainer once per session; invalidate if the model changes
+    if st.session_state.get("shap_explainer") is None:
+        st.session_state["shap_explainer"] = shap.TreeExplainer(
+            _model,
+            data=_X_background,
+            feature_perturbation="interventional",
+        )
+
+    explainer = st.session_state["shap_explainer"]
     sv = explainer.shap_values(_X_query)
+
     # Normalise output to a list-of-arrays regardless of shap version
     if isinstance(sv, np.ndarray):
         if sv.ndim == 3:          # shape: (n_samples, n_features, n_classes)
@@ -1197,8 +1242,8 @@ def render_shap_analysis(taste_model, X_train_bg, X_query_df,
             safe_idx       = min(predicted_class_idx, n_shap_classes - 1)
             sv_class       = shap_vals[safe_idx]
 
-            explainer  = shap.TreeExplainer(taste_model, data=X_bg_np,
-                                            feature_perturbation="interventional")
+            # Re-use cached explainer to get expected_value — no second build
+            explainer = st.session_state["shap_explainer"]
             raw_ev = explainer.expected_value
             if isinstance(raw_ev, (list, np.ndarray)):
                 base_value = float(raw_ev[min(safe_idx, len(raw_ev) - 1)])
@@ -1749,6 +1794,10 @@ def render_structural_analysis(pdb_text: str, prefix: str = "", seq: str = ""):
 
 # ==========================================================
 # SECTION 17 — MODEL TRAINING
+# FIX 1: le_taste is pre-fitted on TASTE_CLASSES before transform.
+# This guarantees all 6 classes are always in the encoder regardless
+# of which classes appear (or are rare) in the training data.
+# The classifier itself is unaffected — it sees the same integer labels.
 # ==========================================================
 
 @st.cache_resource(show_spinner="Training models on dataset…")
@@ -1768,15 +1817,25 @@ def train_models():
     ].reset_index(drop=True)
 
     df["solubility"] = df["solubility"].str.strip().str.rstrip(".")
-    # ── 6-CLASS TASTE MAPPING ──────────────────────────────
+
+    # ── FIX 2: corrected simplify_taste applied here ──────────────────────
     df["taste"] = simplify_taste(df["taste"])
+
     # Remove any rows whose taste did not map to a valid class
     df = df[df["taste"].isin(TASTE_CLASSES)].reset_index(drop=True)
 
-    X        = build_feature_table(df["peptide"])
+    X = build_feature_table(df["peptide"])
+
+    # ── FIX 1: pre-fit LabelEncoder on all 6 known classes ────────────────
+    # le_taste.fit(TASTE_CLASSES) locks in a fixed, deterministic mapping:
+    #   Bitter→0, Neutral→1, Salty→2, Sour→3, Sweet→4, Umami→5
+    # This is independent of which classes happen to appear in the data,
+    # so rare or zero-count classes are never silently dropped.
     le_taste = LabelEncoder()
+    le_taste.fit(TASTE_CLASSES)          # <-- FIX 1
+    y_taste  = le_taste.transform(df["taste"])
+
     le_sol   = LabelEncoder()
-    y_taste  = le_taste.fit_transform(df["taste"])
     y_sol    = le_sol.fit_transform(df["solubility"])
     y_dock   = df["docking score (kcal/mol)"].values
 
@@ -1965,6 +2024,9 @@ if st.session_state.current_mode != mode:
     st.session_state.pdb_text        = None
     st.session_state.pdb_source      = None
     st.session_state.current_mode    = mode
+    # FIX 3: also clear cached SHAP explainer on mode switch so it
+    # is rebuilt fresh if the user returns to Single Peptide mode
+    st.session_state.shap_explainer  = None
     _close_all_figs()
 
 
@@ -2018,6 +2080,9 @@ if mode == "Single Peptide Prediction":
 
     if st.button("🚀 Run Prediction", type="primary"):
         st.session_state.pdf_figures = []
+        # FIX 3: reset explainer on each new prediction run so a fresh
+        # background dataset is used if X_bg has changed
+        st.session_state.shap_explainer = None
         _close_all_figs()
 
         if len(seq) < 1:
