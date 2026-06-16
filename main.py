@@ -2,7 +2,7 @@
 # PepTastePredictor — app.py
 # Hybrid Structural Engine v2 | Light + Dark Mode
 # Real metrics: Taste 70.0% | Solubility 97.5% | Docking R²=0.760
-# Taste classes: Bitter, Salty, Sour, Sweet (4-class, primary taste)
+# Taste classes: Bitter, Salty, Sour, Sweet, Umami, Neutral (6-class, primary taste)
 # SHAP interpretability integrated
 # ==========================================================
 
@@ -82,12 +82,16 @@ KD_SCALE = {
     "S": -0.8, "T": -0.7, "V": 4.2,  "W": -0.9, "Y": -1.3,
 }
 
-# Primary taste classes (derived from first-listed taste in composite annotations)
-TASTE_CLASSES = ["Bitter", "Salty", "Sour", "Sweet"]
+# Primary taste classes — 6-class model
+TASTE_CLASSES = ["Bitter", "Neutral", "Salty", "Sour", "Sweet", "Umami"]
 
 TASTE_EMOJI = {
-    "Bitter": "😖", "Sweet": "😋",
-    "Salty":  "🧂", "Sour":  "😮‍💨",
+    "Bitter":  "😖",
+    "Sweet":   "😋",
+    "Salty":   "🧂",
+    "Sour":    "😮‍💨",
+    "Umami":   "🍖",
+    "Neutral": "😶",
 }
 
 # Chou-Fasman propensity tables
@@ -256,7 +260,7 @@ if os.path.exists("logo.png"):
 st.sidebar.markdown("### 🧬 PepTastePredictor")
 st.sidebar.write("AI-driven peptide analysis platform")
 st.sidebar.markdown("""
-- 🎯 Taste prediction (4 classes)
+- 🎯 Taste prediction (6 classes)
 - 💧 Solubility prediction
 - 🔗 Docking score estimation
 - 🔬 Structural bioinformatics
@@ -364,19 +368,18 @@ def simplify_taste(taste_series):
     """
     Map composite taste labels (e.g. 'Sour Sweet Umami') to a single
     primary taste class by taking the first recognised base taste word.
-    This reflects the dominant/first-listed taste in the source annotation.
-    Classes retained: Bitter, Salty, Sour, Sweet.
-    Note: 'Umami' entries that appear ONLY as a secondary modifier are
-    subsumed into the primary taste; pure-Umami-only labels (none in this
-    dataset) would map to the first matching word.
+    Classes retained: Bitter, Salty, Sour, Sweet, Umami, Neutral.
+    Entries that do not match any known taste word default to 'Neutral'.
     """
-    base_tastes = ["Bitter", "Sweet", "Salty", "Sour", "Umami"]
+    base_tastes = ["Bitter", "Sweet", "Salty", "Sour", "Umami", "Neutral"]
     def _map(t):
         words = str(t).split()
         for w in words:
-            if w in base_tastes:
-                return w
-        return "Bitter"
+            # case-insensitive match
+            for bt in base_tastes:
+                if w.strip().lower() == bt.lower():
+                    return bt
+        return "Neutral"
     return taste_series.apply(_map)
 
 
@@ -1102,12 +1105,8 @@ def compute_shap_values(_model, _X_background, _X_query, feature_names):
 
 
 def plot_shap_bar(shap_vals_class, feature_names, seq, predicted_class, top_n=15):
-    """
-    Horizontal bar chart of top SHAP contributions for the predicted class.
-    Positive SHAP = pushes toward predicted class; negative = away.
-    """
     C     = get_plot_colors()
-    vals  = shap_vals_class[0]          # shape: (n_features,)
+    vals  = shap_vals_class[0]
     df_sh = pd.DataFrame({
         "feature":    [prettify_feature(f) for f in feature_names],
         "shap_value": vals,
@@ -1136,14 +1135,10 @@ def plot_shap_bar(shap_vals_class, feature_names, seq, predicted_class, top_n=15
 
 def plot_shap_waterfall_simple(shap_vals_class, feature_names, base_value,
                                 seq, predicted_class, top_n=10):
-    """
-    Simplified waterfall-style plot showing cumulative SHAP contribution
-    from baseline to final prediction probability for the predicted class.
-    """
     C    = get_plot_colors()
     vals = shap_vals_class[0]
     idx  = np.argsort(np.abs(vals))[::-1][:top_n]
-    idx  = idx[np.argsort(idx)]          # sort by feature index for readability
+    idx  = idx[np.argsort(idx)]
 
     selected_vals  = vals[idx]
     selected_names = [prettify_feature(feature_names[i]) for i in idx]
@@ -1198,14 +1193,10 @@ def render_shap_analysis(taste_model, X_train_bg, X_query_df,
             shap_vals = compute_shap_values(
                 taste_model, X_bg_np, X_query_np, tuple(feature_names))
 
-            # shap_vals is now a normalised list: one (1, n_features) array per class.
-            # Clamp the class index so it never exceeds the available arrays —
-            # this can happen when shap merges classes internally.
             n_shap_classes = len(shap_vals)
             safe_idx       = min(predicted_class_idx, n_shap_classes - 1)
             sv_class       = shap_vals[safe_idx]
 
-            # Base value — handle scalar, list, or ndarray from different shap versions
             explainer  = shap.TreeExplainer(taste_model, data=X_bg_np,
                                             feature_perturbation="interventional")
             raw_ev = explainer.expected_value
@@ -1214,7 +1205,6 @@ def render_shap_analysis(taste_model, X_train_bg, X_query_df,
             else:
                 base_value = float(raw_ev)
 
-            # Bar chart
             fig_bar = plot_shap_bar(sv_class, feature_names, seq, predicted_class)
             save_fig(fig_bar, "shap_bar.png")
             st.image("shap_bar.png", use_column_width=True)
@@ -1237,7 +1227,6 @@ def render_shap_analysis(taste_model, X_train_bg, X_query_df,
                 f"{predicted_class}; negative SHAP values reduce it."
             )
 
-            # Waterfall
             st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
             st.markdown("### 📉 SHAP Waterfall Plot")
             fig_wf = plot_shap_waterfall_simple(
@@ -1630,10 +1619,6 @@ def caption_ramachandran(phi_psi, seq=""):
 
 
 def caption_distance_map(dist_matrix, seq=""):
-    """
-    Generate a plain-language interpretation of the Cα distance map,
-    suitable for a research paper figure legend.
-    """
     n = dist_matrix.shape[0]
     if n < 2:
         return "Distance map unavailable — structure contains fewer than 2 Cα atoms."
@@ -1644,18 +1629,15 @@ def caption_distance_map(dist_matrix, seq=""):
     d_max  = od.max()
     d_mean = od.mean()
 
-    # Mean sequential bond distance (adjacent residues, ideal ~3.8 Å)
     sequential = [dist_matrix[i, i + 1] for i in range(n - 1)]
     mean_seq   = float(np.mean(sequential)) if sequential else 3.8
 
-    # Long-range contacts: residues separated by >3 positions but within 8 Å spatially
     lr_pairs = [(i, j)
                 for i in range(n)
                 for j in range(i + 4, n)
                 if dist_matrix[i, j] < 8.0]
     n_lr = len(lr_pairs)
 
-    # Short-range contacts (|i-j| = 2 or 3) reflect turns and loops
     n_sr = sum(1 for i in range(n) for j in range(n)
                if 1 < abs(i - j) <= 3 and dist_matrix[i, j] < 7.0)
 
@@ -1786,7 +1768,10 @@ def train_models():
     ].reset_index(drop=True)
 
     df["solubility"] = df["solubility"].str.strip().str.rstrip(".")
-    df["taste"]      = simplify_taste(df["taste"])
+    # ── 6-CLASS TASTE MAPPING ──────────────────────────────
+    df["taste"] = simplify_taste(df["taste"])
+    # Remove any rows whose taste did not map to a valid class
+    df = df[df["taste"].isin(TASTE_CLASSES)].reset_index(drop=True)
 
     X        = build_feature_table(df["peptide"])
     le_taste = LabelEncoder()
@@ -1826,7 +1811,6 @@ def train_models():
         "Docking RMSE":        np.sqrt(mean_squared_error(yd_te, dock_preds)),
     }
 
-    # Keep a background subset for SHAP (max 100 samples for speed)
     bg_size = min(100, len(Xtr))
     rng     = np.random.default_rng(42)
     bg_idx  = rng.choice(len(Xtr), bg_size, replace=False)
@@ -1953,7 +1937,7 @@ st.markdown("""
 <p>
 Integrated machine learning and structural bioinformatics for peptide taste,
 solubility, docking score estimation, and 3D structure analysis.<br>
-<strong>Taste classes:</strong> Bitter · Salty · Sour · Sweet (4-class primary-taste model) &nbsp;|&nbsp;
+<strong>Taste classes:</strong> Bitter · Salty · Sour · Sweet · Umami · Neutral (6-class primary-taste model) &nbsp;|&nbsp;
 <strong>SHAP interpretability</strong> for mechanistic insight &nbsp;|&nbsp;
 <strong>Hybrid Structural Engine v2:</strong>
 RCSB PDB → Remote ESMFold → Chou-Fasman Folder → PeptideBuilder
@@ -2084,7 +2068,7 @@ if mode == "Single Peptide Prediction":
               </div>
             </div>""", unsafe_allow_html=True)
 
-            # Taste probability breakdown
+            # Taste probability breakdown — shows all 6 classes
             st.markdown("#### Taste Class Probabilities")
             prob_df = pd.DataFrame({
                 "Taste Class": le_taste.classes_,
@@ -2405,7 +2389,7 @@ if st.session_state.show_analytics:
           <div class="metric-box">
             <div class="metric-box-label">Taste Accuracy</div>
             <div class="metric-box-value">{metrics['Taste accuracy']*100:.1f}%</div>
-            <div class="metric-box-sub">4-class primary taste</div>
+            <div class="metric-box-sub">6-class primary taste</div>
           </div>
           <div class="metric-box">
             <div class="metric-box-label">Taste F1</div>
@@ -2528,7 +2512,7 @@ if st.session_state.show_analytics:
 st.markdown(f"""
 <div class="footer">
 &copy; {date.today().year} &nbsp; <b>PepTastePredictor v2</b><br>
-4-class primary-taste model · SHAP interpretability · Hybrid Structural Engine<br>
+6-class primary-taste model (Bitter · Salty · Sour · Sweet · Umami · Neutral) · SHAP interpretability · Hybrid Structural Engine<br>
 Structure priority: RCSB PDB → Remote ESMFold → Chou-Fasman Folder → PeptideBuilder<br>
 For academic and research use only
 </div>
