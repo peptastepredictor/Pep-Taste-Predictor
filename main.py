@@ -2474,13 +2474,13 @@ if st.session_state.show_analytics:
 
         for cls in le_taste.classes_:
             if cls in _report_dict:
-            _rows.append({
-                "Taste Class":  cls,
-                "n (Test)":     _count_map.get(cls, 0),
-                "Precision":    round(_report_dict[cls]["precision"], 3),
-                "Recall":       round(_report_dict[cls]["recall"],    3),
-                "F1-Score":     round(_report_dict[cls]["f1-score"],  3),
-            })
+                _rows.append({
+                    "Taste Class":  cls,
+                    "n (Test)":     _count_map.get(cls, 0),
+                    "Precision":    round(_report_dict[cls]["precision"], 3),
+                    "Recall":       round(_report_dict[cls]["recall"],    3),
+                    "F1-Score":     round(_report_dict[cls]["f1-score"],  3),
+                })
         _table1_df = pd.DataFrame(_rows)
         st.dataframe(_table1_df, use_container_width=True, hide_index=True)
         st.caption("Copy these values directly into Table 1 of your paper.")
