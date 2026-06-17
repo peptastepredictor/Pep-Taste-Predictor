@@ -2461,10 +2461,10 @@ if st.session_state.show_analytics:
         from sklearn.metrics import classification_report
         _taste_preds_report = taste_model.predict(X_test)
         _report_dict = classification_report(
-        yt_test,
-        _taste_preds_report,
-        target_names=le_taste.classes_,
-        output_dict=True
+            yt_test,
+            _taste_preds_report,
+            target_names=le_taste.classes_,
+            output_dict=True
         )
 
         _rows = []
