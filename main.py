@@ -1895,6 +1895,32 @@ def train_models():
     le_taste, le_sol, metrics, X_bg,
 ) = train_models()
 
+from sklearn.metrics import classification_report
+import pandas as pd
+
+# Get real predictions on test set
+taste_preds_test = taste_model.predict(X_test)
+
+# Full classification report
+report = classification_report(
+    yt_test,
+    taste_preds_test,
+    target_names=le_taste.classes_,
+    output_dict=True
+)
+
+# Convert to readable dataframe
+df_report = pd.DataFrame(report).T
+print("=== REAL TABLE 1 VALUES ===")
+print(df_report.round(3))
+
+# Also print class counts in test set
+print("\n=== TEST SET CLASS COUNTS ===")
+import numpy as np
+unique, counts = np.unique(yt_test, return_counts=True)
+for u, c in zip(unique, counts):
+    print(f"{le_taste.classes_[u]}: n={c}")
+
 FEATURE_NAMES = list(X_all.columns)
 
 
