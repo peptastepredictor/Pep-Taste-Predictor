@@ -2584,3 +2584,18 @@ Structure priority: RCSB PDB → Remote ESMFold → Chou-Fasman Folder → Pepti
 For academic and research use only
 </div>
 """, unsafe_allow_html=True)
+
+
+
+
+
+from sklearn.metrics import classification_report
+report = classification_report(
+    yt_test, 
+    taste_model.predict(X_test),
+    target_names=le_taste.classes_,
+    output_dict=True
+)
+import pandas as pd
+df_report = pd.DataFrame(report).T
+print(df_report)
