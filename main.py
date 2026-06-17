@@ -2454,6 +2454,37 @@ if st.session_state.show_analytics:
     with st.expander("📊 Model Performance & Dataset Analytics", expanded=False):
 
         st.markdown("### 📈 Model Performance Metrics")
+        # ── REAL TABLE 1 ──────────────────────────────────────────
+        st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
+        st.markdown("### 📋 Per-Class Taste Classification Metrics (Table 1)")
+
+        from sklearn.metrics import classification_report
+        _taste_preds_report = taste_model.predict(X_test)
+        _report_dict = classification_report(
+        yt_test,
+        _taste_preds_report,
+        target_names=le_taste.classes_,
+        output_dict=True
+        )
+
+        _rows = []
+        import numpy as np
+        _unique, _counts = np.unique(yt_test, return_counts=True)
+        _count_map = {le_taste.classes_[u]: c for u, c in zip(_unique, _counts)}
+
+        for cls in le_taste.classes_:
+            if cls in _report_dict:
+            _rows.append({
+                "Taste Class":  cls,
+                "n (Test)":     _count_map.get(cls, 0),
+                "Precision":    round(_report_dict[cls]["precision"], 3),
+                "Recall":       round(_report_dict[cls]["recall"],    3),
+                "F1-Score":     round(_report_dict[cls]["f1-score"],  3),
+            })
+        _table1_df = pd.DataFrame(_rows)
+        st.dataframe(_table1_df, use_container_width=True, hide_index=True)
+        st.caption("Copy these values directly into Table 1 of your paper.")
+# ── END TABLE 1 ───────────────────────────────────────────
         st.markdown(f"""
         <div class="metric-grid" style="margin-bottom:28px;">
           <div class="metric-box">
