@@ -1894,6 +1894,7 @@ def train_models():
     taste_model, sol_model, dock_model,
     le_taste, le_sol, metrics, X_bg,
 ) = train_models()
+FEATURE_NAMES = list(X_all.columns)
 
 from sklearn.metrics import classification_report
 import pandas as pd
@@ -1920,10 +1921,6 @@ import numpy as np
 unique, counts = np.unique(yt_test, return_counts=True)
 for u, c in zip(unique, counts):
     print(f"{le_taste.classes_[u]}: n={c}")
-
-FEATURE_NAMES = list(X_all.columns)
-
-
 # ==========================================================
 # SECTION 19 — PDF REPORT ENGINE
 # ==========================================================
