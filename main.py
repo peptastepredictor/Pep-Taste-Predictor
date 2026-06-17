@@ -2463,8 +2463,10 @@ if st.session_state.show_analytics:
         _report_dict = classification_report(
             yt_test,
             _taste_preds_report,
-            target_names=le_taste.classes_,
-            output_dict=True
+            labels=range(len(le_taste.classes_)),
+            target_names=list(le_taste.classes_),
+            output_dict=True,
+            zero_division=0
         )
 
         _rows = []
