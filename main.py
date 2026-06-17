@@ -59,15 +59,7 @@ from reportlab.lib import colors as rl_colors
 
 
 
-from sklearn.metrics import classification_report
-report = classification_report(
-    yt_test, 
-    taste_model.predict(X_test),
-    target_names=le_taste.classes_,
-    output_dict=True
-)
-df_report = pd.DataFrame(report).T
-print(df_report)
+
 
 
 # ==========================================================
