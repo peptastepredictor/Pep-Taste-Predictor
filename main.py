@@ -2046,21 +2046,15 @@ if mode == "Single Peptide Prediction":
         type=["fasta", "fa", "faa", "txt"],
         key="single_fasta_upload",
     )
-    fasta_seq = ""
+    fasta_seq, fasta_name = "", ""
     if fasta_file is not None:
         records = read_uploaded_fasta(fasta_file)
         if records:
-            fasta_seq = records[0][1]
+            fasta_name, fasta_seq = records[0]
             st.success(
-                f"✅ FASTA loaded: **{records[0][0] or 'unnamed'}** — {len(fasta_seq)} aa")
-            # FIX 4: Once a widget has a `key`, Streamlit stores its value in
-            # st.session_state and ignores the `value=` argument on later
-            # reruns. Passing value=fasta_seq to the text_area below therefore
-            # has no effect after the first run, so the box stayed empty and
-            # `seq` came back blank even though the FASTA loaded successfully.
-            # We instead seed st.session_state["single_seq_input"] directly,
-            # but only when this is a *new* upload (tracked via name+size),
-            # so we don't clobber text the user typed/edited afterwards.
+                f"✅ FASTA loaded: **{fasta_name or 'unnamed'}** — {len(fasta_seq)} aa")
+            # Keep the visible text box roughly in sync (best-effort only —
+            # see note below for why this is no longer load-bearing).
             file_sig = f"{fasta_file.name}_{fasta_file.size}"
             if st.session_state.get("_single_fasta_sig") != file_sig:
                 st.session_state["single_seq_input"] = fasta_seq
@@ -2074,7 +2068,16 @@ if mode == "Single Peptide Prediction":
         key="single_seq_input",
         height=100,
     )
-    seq = clean_sequence(seq_raw)
+
+    # FIX 4 (robust version): prediction must never depend on whether the
+    # text_area widget happened to display the uploaded sequence correctly.
+    # Streamlit's widget-state timing can lag by a run in some situations
+    # (e.g. value= vs session_state precedence, or the user clicking
+    # "Run Prediction" before the widget has redrawn). Per the uploader's
+    # own label — "overrides text input below" — a successfully parsed
+    # FASTA file always wins outright: it is used for the prediction
+    # directly, completely independent of seq_raw.
+    seq = clean_sequence(fasta_seq) if fasta_seq else clean_sequence(seq_raw)
 
     if seq:
         st.markdown(
