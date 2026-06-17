@@ -2053,12 +2053,23 @@ if mode == "Single Peptide Prediction":
             fasta_seq = records[0][1]
             st.success(
                 f"✅ FASTA loaded: **{records[0][0] or 'unnamed'}** — {len(fasta_seq)} aa")
+            # FIX 4: Once a widget has a `key`, Streamlit stores its value in
+            # st.session_state and ignores the `value=` argument on later
+            # reruns. Passing value=fasta_seq to the text_area below therefore
+            # has no effect after the first run, so the box stayed empty and
+            # `seq` came back blank even though the FASTA loaded successfully.
+            # We instead seed st.session_state["single_seq_input"] directly,
+            # but only when this is a *new* upload (tracked via name+size),
+            # so we don't clobber text the user typed/edited afterwards.
+            file_sig = f"{fasta_file.name}_{fasta_file.size}"
+            if st.session_state.get("_single_fasta_sig") != file_sig:
+                st.session_state["single_seq_input"] = fasta_seq
+                st.session_state["_single_fasta_sig"] = file_sig
         else:
             st.error("Could not extract a valid sequence from the uploaded file.")
 
     seq_raw = st.text_area(
         "Enter peptide sequence (FASTA or plain single-letter code)",
-        value=fasta_seq,
         placeholder="Paste sequence or FASTA here…",
         key="single_seq_input",
         height=100,
@@ -2620,9 +2631,3 @@ Structure priority: RCSB PDB → Remote ESMFold → Chou-Fasman Folder → Pepti
 For academic and research use only
 </div>
 """, unsafe_allow_html=True)
-
-
-
-
-
-
