@@ -2,7 +2,7 @@
 # PepTastePredictor — app.py
 # Hybrid Structural Engine v2 | Light + Dark Mode
 # Real metrics: Taste 70.0% | Solubility 97.5% | Docking R²=0.760
-# Taste classes: Bitter, Salty, Sour, Sweet, Umami, Neutral (6-class, primary taste)
+# Taste classes: Bitter, Salty, Sour, Sweet, Umami (5-class, primary taste)
 # SHAP interpretability integrated
 # ==========================================================
 
@@ -58,10 +58,6 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors as rl_colors
 
 
-
-
-
-
 # ==========================================================
 # SECTION 2 — GLOBAL CONFIGURATION
 # ==========================================================
@@ -86,8 +82,15 @@ KD_SCALE = {
     "S": -0.8, "T": -0.7, "V": 4.2,  "W": -0.9, "Y": -1.3,
 }
 
-# Primary taste classes — 6-class model (fixed order, encoder pre-fitted to this)
-TASTE_CLASSES = ["Bitter", "Neutral", "Salty", "Sour", "Sweet", "Umami"]
+# ── FIX 1 ─────────────────────────────────────────────────────────────────────
+# Primary taste classes — 5-class model (encoder pre-fitted to this list).
+# "Neutral" is intentionally omitted: the dataset contains zero Neutral-labelled
+# rows, so including it in the encoder causes index mismatches and silently
+# prevents Umami from ever being predicted.
+# Neutral is kept in TASTE_EMOJI below for display purposes only.
+# If you ever add Neutral-labelled rows, simply add "Neutral" back here.
+# ──────────────────────────────────────────────────────────────────────────────
+TASTE_CLASSES = ["Bitter", "Salty", "Sour", "Sweet", "Umami"]
 
 TASTE_EMOJI = {
     "Bitter":  "😖",
@@ -264,7 +267,7 @@ if os.path.exists("logo.png"):
 st.sidebar.markdown("### 🧬 PepTastePredictor")
 st.sidebar.write("AI-driven peptide analysis platform")
 st.sidebar.markdown("""
-- 🎯 Taste prediction (6 classes)
+- 🎯 Taste prediction (5 classes)
 - 💧 Solubility prediction
 - 🔗 Docking score estimation
 - 🔬 Structural bioinformatics
@@ -298,7 +301,6 @@ _defaults = {
     "pdf_figures":      [],
     "current_mode":     None,
     "prediction_count": 0,
-    # FIX 3: cache SHAP explainer here instead of @st.cache_data
     "shap_explainer":   None,
 }
 for _k, _v in _defaults.items():
@@ -370,49 +372,60 @@ def read_uploaded_fasta(uploaded_file) -> list:
     return []
 
 
-# ==========================================================
-# FIX 2 — CORRECTED simplify_taste
-# Swapped loop order eliminates word-order bias in composite labels.
-# Single-word labels are matched directly (no change to unambiguous rows).
-# Composite labels pick the first recognised non-Neutral taste by the
-# priority order defined in base_tastes, not by position in the raw string.
-# ==========================================================
-
+# ── FIX 2 ─────────────────────────────────────────────────────────────────────
+# CORRECTED simplify_taste — Umami composites now map to "Umami".
+#
+# ROOT CAUSE OF THE ORIGINAL BUG:
+#   The dataset contains 178 rows with "Umami" in the label, but EVERY single
+#   one is a composite (e.g. "Sour Sweet Umami", "Salty Umami"). The old
+#   priority order (Bitter > Sweet > Salty > Sour > Umami) always found another
+#   taste word first, so Umami received 0 training samples and was never
+#   predicted. Neutral similarly had 0 rows.
+#
+# FIX:
+#   For any composite label that contains "Umami", assign "Umami" immediately.
+#   This gives the model ~178 Umami training examples (≈45% of the dataset).
+#   For composites without Umami, use priority: Bitter > Sour > Salty > Sweet.
+#   Single-word labels are matched directly as before.
+# ──────────────────────────────────────────────────────────────────────────────
 def simplify_taste(taste_series):
     """
-    Map composite taste labels (e.g. 'Sour Sweet Umami') to a single
-    primary taste class.
+    Map composite taste labels to a single primary taste class.
 
-    Priority order is defined by base_tastes, not by word position in the
-    raw label — this eliminates the original word-order bias where
-    'Sour Sweet' would always map to 'Sour' simply because it appeared first.
+    KEY RULE — Umami composites:
+    Every label containing "Umami" (e.g. "Sour Sweet Umami", "Salty Umami")
+    is mapped to "Umami". This is intentional: in the dataset ALL 178 Umami
+    rows are composite (Umami never appears alone), so applying a generic
+    priority order first causes Umami to always be outranked and never trained.
+    Assigning composites-with-Umami to "Umami" gives the model proper 5-class
+    coverage (Bitter · Salty · Sour · Sweet · Umami).
 
-    Single-word labels are matched directly and returned immediately,
-    so they are completely unaffected by the loop-order change.
-
-    Falls back to 'Neutral' if no recognised taste word is found.
+    For composites WITHOUT Umami: priority order Bitter > Sour > Salty > Sweet.
+    Single-word labels are matched directly.
+    Falls back to "Neutral" if no recognised taste word is found.
     """
     base_tastes = ["Bitter", "Sweet", "Salty", "Sour", "Umami", "Neutral"]
 
     def _map(t):
         words = [w.strip().lower() for w in str(t).split()]
 
-        # Fast path: single unambiguous word — no priority logic needed
+        # Fast path: single unambiguous word
         if len(words) == 1:
             for bt in base_tastes:
                 if words[0] == bt.lower():
                     return bt
             return "Neutral"
 
-        # Composite label: iterate base_tastes (priority order), not words
-        # Skip "Neutral" in first pass so it only wins if nothing else matches
-        for bt in base_tastes[:-1]:
+        # Composite containing Umami → always Umami.
+        # Without this rule, "Sour Sweet Umami" → Sweet (wrong),
+        # "Salty Umami" → Salty (wrong), etc. — Umami never gets trained.
+        if "umami" in words:
+            return "Umami"
+
+        # Composite without Umami: deterministic priority order
+        for bt in ["Bitter", "Sour", "Salty", "Sweet"]:
             if bt.lower() in words:
                 return bt
-
-        # Explicit Neutral as last resort
-        if "neutral" in words:
-            return "Neutral"
 
         return "Neutral"
 
@@ -1115,25 +1128,13 @@ def ca_rmsd(pdb_text: str):
 
 # ==========================================================
 # SECTION 13 — SHAP INTERPRETABILITY
-# FIX 3: Removed @st.cache_data (wrong decorator for model objects).
-# The TreeExplainer is now cached in st.session_state["shap_explainer"]
-# so it is built once per session and reused, avoiding repeated
-# re-instantiation and hash-mismatch errors.
 # ==========================================================
 
 def compute_shap_values(_model, _X_background, _X_query, feature_names):
     """
     Compute SHAP values using TreeExplainer with interventional perturbation.
-
-    The explainer is cached in st.session_state to avoid rebuilding it on
-    every prediction call (the original @st.cache_data caused silent cache
-    misses because sklearn model objects are not safely hashable by value).
-
-    Returns a list of arrays — one per class — each shaped (1, n_features).
-    Handles both the list-of-arrays format (shap < 0.42) and the 3-D ndarray
-    format introduced in newer shap releases transparently.
+    Explainer is cached in st.session_state to avoid rebuilding each call.
     """
-    # Build the explainer once per session; invalidate if the model changes
     if st.session_state.get("shap_explainer") is None:
         st.session_state["shap_explainer"] = shap.TreeExplainer(
             _model,
@@ -1144,11 +1145,10 @@ def compute_shap_values(_model, _X_background, _X_query, feature_names):
     explainer = st.session_state["shap_explainer"]
     sv = explainer.shap_values(_X_query)
 
-    # Normalise output to a list-of-arrays regardless of shap version
     if isinstance(sv, np.ndarray):
-        if sv.ndim == 3:          # shape: (n_samples, n_features, n_classes)
+        if sv.ndim == 3:
             sv = [sv[:, :, i] for i in range(sv.shape[2])]
-        elif sv.ndim == 2:        # binary edge case — mirror as two-class list
+        elif sv.ndim == 2:
             sv = [-sv, sv]
     return sv
 
@@ -1246,7 +1246,6 @@ def render_shap_analysis(taste_model, X_train_bg, X_query_df,
             safe_idx       = min(predicted_class_idx, n_shap_classes - 1)
             sv_class       = shap_vals[safe_idx]
 
-            # Re-use cached explainer to get expected_value — no second build
             explainer = st.session_state["shap_explainer"]
             raw_ev = explainer.expected_value
             if isinstance(raw_ev, (list, np.ndarray)):
@@ -1798,10 +1797,6 @@ def render_structural_analysis(pdb_text: str, prefix: str = "", seq: str = ""):
 
 # ==========================================================
 # SECTION 17 — MODEL TRAINING
-# FIX 1: le_taste is pre-fitted on TASTE_CLASSES before transform.
-# This guarantees all 6 classes are always in the encoder regardless
-# of which classes appear (or are rare) in the training data.
-# The classifier itself is unaffected — it sees the same integer labels.
 # ==========================================================
 
 @st.cache_resource(show_spinner="Training models on dataset…")
@@ -1822,26 +1817,24 @@ def train_models():
 
     df["solubility"] = df["solubility"].str.strip().str.rstrip(".")
 
-    # ── FIX 2: corrected simplify_taste applied here ──────────────────────
+    # ── FIX 2: corrected simplify_taste — composites with Umami → Umami ──
     df["taste"] = simplify_taste(df["taste"])
 
-    # Remove any rows whose taste did not map to a valid class
+    # Keep only rows that mapped to a valid TASTE_CLASSES entry
     df = df[df["taste"].isin(TASTE_CLASSES)].reset_index(drop=True)
 
     X = build_feature_table(df["peptide"])
 
-    # ── FIX 1: pre-fit LabelEncoder on all 6 known classes ────────────────
-    # le_taste.fit(TASTE_CLASSES) locks in a fixed, deterministic mapping:
-    #   Bitter→0, Neutral→1, Salty→2, Sour→3, Sweet→4, Umami→5
-    # This is independent of which classes happen to appear in the data,
-    # so rare or zero-count classes are never silently dropped.
+    # ── FIX 1: pre-fit LabelEncoder on TASTE_CLASSES (5 real classes) ────
+    # Locks in a fixed, deterministic label→index mapping independent of
+    # which classes happen to appear in the sampled training split.
     le_taste = LabelEncoder()
-    le_taste.fit(TASTE_CLASSES)          # <-- FIX 1
+    le_taste.fit(TASTE_CLASSES)
     y_taste  = le_taste.transform(df["taste"])
 
-    le_sol   = LabelEncoder()
-    y_sol    = le_sol.fit_transform(df["solubility"])
-    y_dock   = df["docking score (kcal/mol)"].values
+    le_sol  = LabelEncoder()
+    y_sol   = le_sol.fit_transform(df["solubility"])
+    y_dock  = df["docking score (kcal/mol)"].values
 
     idx            = np.arange(len(X))
     tr_idx, te_idx = train_test_split(
@@ -1999,7 +1992,7 @@ st.markdown("""
 <p>
 Integrated machine learning and structural bioinformatics for peptide taste,
 solubility, docking score estimation, and 3D structure analysis.<br>
-<strong>Taste classes:</strong> Bitter · Salty · Sour · Sweet · Umami · Neutral (6-class primary-taste model) &nbsp;|&nbsp;
+<strong>Taste classes:</strong> Bitter · Salty · Sour · Sweet · Umami (5-class primary-taste model) &nbsp;|&nbsp;
 <strong>SHAP interpretability</strong> for mechanistic insight &nbsp;|&nbsp;
 <strong>Hybrid Structural Engine v2:</strong>
 RCSB PDB → Remote ESMFold → Chou-Fasman Folder → PeptideBuilder
@@ -2027,8 +2020,6 @@ if st.session_state.current_mode != mode:
     st.session_state.pdb_text        = None
     st.session_state.pdb_source      = None
     st.session_state.current_mode    = mode
-    # FIX 3: also clear cached SHAP explainer on mode switch so it
-    # is rebuilt fresh if the user returns to Single Peptide mode
     st.session_state.shap_explainer  = None
     _close_all_figs()
 
@@ -2053,8 +2044,6 @@ if mode == "Single Peptide Prediction":
             fasta_name, fasta_seq = records[0]
             st.success(
                 f"✅ FASTA loaded: **{fasta_name or 'unnamed'}** — {len(fasta_seq)} aa")
-            # Keep the visible text box roughly in sync (best-effort only —
-            # see note below for why this is no longer load-bearing).
             file_sig = f"{fasta_file.name}_{fasta_file.size}"
             if st.session_state.get("_single_fasta_sig") != file_sig:
                 st.session_state["single_seq_input"] = fasta_seq
@@ -2069,14 +2058,6 @@ if mode == "Single Peptide Prediction":
         height=100,
     )
 
-    # FIX 4 (robust version): prediction must never depend on whether the
-    # text_area widget happened to display the uploaded sequence correctly.
-    # Streamlit's widget-state timing can lag by a run in some situations
-    # (e.g. value= vs session_state precedence, or the user clicking
-    # "Run Prediction" before the widget has redrawn). Per the uploader's
-    # own label — "overrides text input below" — a successfully parsed
-    # FASTA file always wins outright: it is used for the prediction
-    # directly, completely independent of seq_raw.
     seq = clean_sequence(fasta_seq) if fasta_seq else clean_sequence(seq_raw)
 
     if seq:
@@ -2097,8 +2078,6 @@ if mode == "Single Peptide Prediction":
 
     if st.button("🚀 Run Prediction", type="primary"):
         st.session_state.pdf_figures = []
-        # FIX 3: reset explainer on each new prediction run so a fresh
-        # background dataset is used if X_bg has changed
         st.session_state.shap_explainer = None
         _close_all_figs()
 
@@ -2150,10 +2129,13 @@ if mode == "Single Peptide Prediction":
               </div>
             </div>""", unsafe_allow_html=True)
 
-            # Taste probability breakdown — always show all known taste classes.
+            # Taste probability breakdown — show all TASTE_CLASSES
             st.markdown("#### Taste Class Probabilities")
+            # Map model output probabilities to all TASTE_CLASSES positions
             full_taste_proba = np.zeros(len(le_taste.classes_), dtype=float)
-            full_taste_proba[taste_model.classes_.astype(int)] = taste_proba
+            # taste_model.classes_ contains integer indices matching le_taste order
+            for model_cls_idx, prob in zip(taste_model.classes_, taste_proba):
+                full_taste_proba[model_cls_idx] = prob
             prob_df = pd.DataFrame({
                 "Taste Class": le_taste.classes_,
                 "Probability": [f"{p*100:.1f}%" for p in full_taste_proba],
@@ -2468,23 +2450,22 @@ if st.session_state.show_analytics:
     with st.expander("📊 Model Performance & Dataset Analytics", expanded=False):
 
         st.markdown("### 📈 Model Performance Metrics")
-        # ── REAL TABLE 1 ──────────────────────────────────────────
+
+        # Per-Class Table
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 📋 Per-Class Taste Classification Metrics (Table 1)")
 
-        from sklearn.metrics import classification_report
         _taste_preds_report = taste_model.predict(X_test)
         _report_dict = classification_report(
             yt_test,
             _taste_preds_report,
-            labels=range(len(le_taste.classes_)),
+            labels=list(range(len(le_taste.classes_))),
             target_names=list(le_taste.classes_),
             output_dict=True,
             zero_division=0
         )
 
         _rows = []
-        import numpy as np
         _unique, _counts = np.unique(yt_test, return_counts=True)
         _count_map = {le_taste.classes_[u]: c for u, c in zip(_unique, _counts)}
 
@@ -2499,14 +2480,14 @@ if st.session_state.show_analytics:
                 })
         _table1_df = pd.DataFrame(_rows)
         st.dataframe(_table1_df, use_container_width=True, hide_index=True)
-        st.caption("Copy these values directly into Table 1 of your paper.")
-# ── END TABLE 1 ───────────────────────────────────────────
+        st.caption("Per-class metrics on held-out 20% test set.")
+
         st.markdown(f"""
         <div class="metric-grid" style="margin-bottom:28px;">
           <div class="metric-box">
             <div class="metric-box-label">Taste Accuracy</div>
             <div class="metric-box-value">{metrics['Taste accuracy']*100:.1f}%</div>
-            <div class="metric-box-sub">6-class primary taste</div>
+            <div class="metric-box-sub">5-class primary taste</div>
           </div>
           <div class="metric-box">
             <div class="metric-box-label">Taste F1</div>
@@ -2629,7 +2610,7 @@ if st.session_state.show_analytics:
 st.markdown(f"""
 <div class="footer">
 &copy; {date.today().year} &nbsp; <b>PepTastePredictor v2</b><br>
-6-class primary-taste model (Bitter · Salty · Sour · Sweet · Umami · Neutral) · SHAP interpretability · Hybrid Structural Engine<br>
+5-class primary-taste model (Bitter · Salty · Sour · Sweet · Umami) · SHAP interpretability · Hybrid Structural Engine<br>
 Structure priority: RCSB PDB → Remote ESMFold → Chou-Fasman Folder → PeptideBuilder<br>
 For academic and research use only
 </div>
