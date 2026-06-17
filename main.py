@@ -373,32 +373,46 @@ def read_uploaded_fasta(uploaded_file) -> list:
 
 
 # ── FIX 2 ─────────────────────────────────────────────────────────────────────
-# CORRECTED simplify_taste — Umami composites now map to "Umami".
+# CORRECTED simplify_taste — Umami composites now map to "Umami", and matching
+# is punctuation-agnostic.
 #
-# ROOT CAUSE OF THE ORIGINAL BUG:
-#   The dataset contains 178 rows with "Umami" in the label, but EVERY single
-#   one is a composite (e.g. "Sour Sweet Umami", "Salty Umami"). The old
-#   priority order (Bitter > Sweet > Salty > Sour > Umami) always found another
-#   taste word first, so Umami received 0 training samples and was never
-#   predicted. Neutral similarly had 0 rows.
+# ROOT CAUSE OF THE ORIGINAL BUG (part A):
+#   The dataset contains rows with "Umami" in the label, but every one of them
+#   is a composite (e.g. "Sour Sweet Umami", "Salty Umami"). The old priority
+#   order (Bitter > Sweet > Salty > Sour > Umami) always found another taste
+#   word first, so Umami received 0 training samples and was never predicted.
+#
+# ROOT CAUSE OF A SECOND, SUBTLER BUG (part B):
+#   The original code tokenised with `str(t).split()`, which only splits on
+#   whitespace. If raw labels use commas, slashes, or trailing punctuation
+#   (e.g. "Sour, Sweet, Umami" or "Bitter."), the punctuation stays glued to
+#   the word ("umami" vs "umami,"), so `words[0] == bt.lower()` and
+#   `"umami" in words` silently fail to match — rows get mis-routed to
+#   "Neutral" and real class coverage shrinks for no good reason.
 #
 # FIX:
-#   For any composite label that contains "Umami", assign "Umami" immediately.
-#   This gives the model ~178 Umami training examples (≈45% of the dataset).
-#   For composites without Umami, use priority: Bitter > Sour > Salty > Sweet.
-#   Single-word labels are matched directly as before.
+#   1. Tokenise with a regex that extracts letter-only words, so commas,
+#      slashes, periods, and any other punctuation never break a match.
+#   2. For any composite label that contains "Umami", assign "Umami"
+#      immediately (composites without this rule never train on Umami).
+#   3. For composites without Umami, use priority: Bitter > Sour > Salty > Sweet.
+#   4. Single-word labels are matched directly.
 # ──────────────────────────────────────────────────────────────────────────────
 def simplify_taste(taste_series):
     """
     Map composite taste labels to a single primary taste class.
 
+    Tokenisation is punctuation-agnostic: "Sour, Sweet, Umami", "Sour/Sweet/Umami",
+    "Bitter." and "BITTER" are all handled identically because tokens are
+    extracted with a letter-only regex before matching, not naive whitespace
+    splitting.
+
     KEY RULE — Umami composites:
-    Every label containing "Umami" (e.g. "Sour Sweet Umami", "Salty Umami")
-    is mapped to "Umami". This is intentional: in the dataset ALL 178 Umami
-    rows are composite (Umami never appears alone), so applying a generic
-    priority order first causes Umami to always be outranked and never trained.
-    Assigning composites-with-Umami to "Umami" gives the model proper 5-class
-    coverage (Bitter · Salty · Sour · Sweet · Umami).
+    Every label containing "Umami" (e.g. "Sour Sweet Umami", "Salty, Umami")
+    is mapped to "Umami". This is intentional: composite Umami rows would
+    otherwise always be outranked by another taste word and Umami would never
+    get trained. Assigning composites-with-Umami to "Umami" gives the model
+    proper 5-class coverage (Bitter · Salty · Sour · Sweet · Umami).
 
     For composites WITHOUT Umami: priority order Bitter > Sour > Salty > Sweet.
     Single-word labels are matched directly.
@@ -407,7 +421,13 @@ def simplify_taste(taste_series):
     base_tastes = ["Bitter", "Sweet", "Salty", "Sour", "Umami", "Neutral"]
 
     def _map(t):
-        words = [w.strip().lower() for w in str(t).split()]
+        # Letter-only tokenisation: robust to commas, slashes, periods,
+        # hyphens, extra whitespace, etc. "Sour, Sweet, Umami." ->
+        # ["sour", "sweet", "umami"].
+        words = re.findall(r"[a-zA-Z]+", str(t).lower())
+
+        if not words:
+            return "Neutral"
 
         # Fast path: single unambiguous word
         if len(words) == 1:
@@ -1817,11 +1837,20 @@ def train_models():
 
     df["solubility"] = df["solubility"].str.strip().str.rstrip(".")
 
-    # ── FIX 2: corrected simplify_taste — composites with Umami → Umami ──
+    # ── FIX 2: corrected simplify_taste — composites with Umami → Umami,
+    #    punctuation-agnostic matching ──
     df["taste"] = simplify_taste(df["taste"])
 
     # Keep only rows that mapped to a valid TASTE_CLASSES entry
     df = df[df["taste"].isin(TASTE_CLASSES)].reset_index(drop=True)
+
+    # ── Diagnostic: per-class row counts after mapping/filtering. ──
+    # Surfaced in the UI (Section 25) so it's easy to visually confirm all
+    # 5 taste classes have non-trivial training coverage instead of trusting
+    # it blindly.
+    class_counts_after_mapping = (
+        df["taste"].value_counts().reindex(TASTE_CLASSES, fill_value=0)
+    )
 
     X = build_feature_table(df["peptide"])
 
@@ -1836,9 +1865,22 @@ def train_models():
     y_sol   = le_sol.fit_transform(df["solubility"])
     y_dock  = df["docking score (kcal/mol)"].values
 
-    idx            = np.arange(len(X))
-    tr_idx, te_idx = train_test_split(
-        idx, test_size=0.2, random_state=42, stratify=y_taste)
+    # ── FIX 3 — Safety fallback around the stratified split ──────────────
+    # train_test_split(stratify=...) raises ValueError if any class has
+    # fewer than 2 members (it can't put ≥1 sample in both the train and
+    # test side). Rather than letting that crash the whole app, fall back
+    # to a non-stratified split and surface a visible warning so the issue
+    # is obvious instead of silent.
+    idx = np.arange(len(X))
+    stratified_ok = True
+    try:
+        tr_idx, te_idx = train_test_split(
+            idx, test_size=0.2, random_state=42, stratify=y_taste)
+    except ValueError:
+        stratified_ok = False
+        tr_idx, te_idx = train_test_split(
+            idx, test_size=0.2, random_state=42, stratify=None)
+
     Xtr, Xte       = X.iloc[tr_idx], X.iloc[te_idx]
     yt_tr, yt_te   = y_taste[tr_idx], y_taste[te_idx]
     ys_tr, ys_te   = y_sol[tr_idx],   y_sol[te_idx]
@@ -1874,7 +1916,8 @@ def train_models():
 
     return (df, X, Xtr, Xte, yt_te, ys_te, yd_te,
             taste_model, sol_model, dock_model,
-            le_taste, le_sol, metrics, X_bg)
+            le_taste, le_sol, metrics, X_bg,
+            class_counts_after_mapping, stratified_ok)
 
 
 # ==========================================================
@@ -1886,8 +1929,19 @@ def train_models():
     yt_test, ys_test, yd_test,
     taste_model, sol_model, dock_model,
     le_taste, le_sol, metrics, X_bg,
+    taste_class_counts, stratified_ok,
 ) = train_models()
 FEATURE_NAMES = list(X_all.columns)
+
+if not stratified_ok:
+    st.warning(
+        "⚠️ One or more taste classes had too few samples for a stratified "
+        "train/test split, so a plain random split was used instead. "
+        "Check the class-coverage table in **Model Performance & Dataset "
+        "Analytics** below — a class with very few rows will have unreliable "
+        "metrics regardless of split strategy.",
+        icon="⚠️",
+    )
 
 
 # ==========================================================
@@ -2450,6 +2504,36 @@ if st.session_state.show_analytics:
     with st.expander("📊 Model Performance & Dataset Analytics", expanded=False):
 
         st.markdown("### 📈 Model Performance Metrics")
+
+        # ── Diagnostic: class coverage after label mapping ──
+        st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
+        st.markdown("### 🩺 Taste Class Coverage (after label mapping)")
+        _coverage_df = pd.DataFrame({
+            "Taste Class": taste_class_counts.index,
+            "Rows (full dataset)": taste_class_counts.values,
+            "% of dataset": [
+                f"{v / taste_class_counts.sum() * 100:.1f}%"
+                for v in taste_class_counts.values
+            ],
+        })
+        st.dataframe(_coverage_df, use_container_width=True, hide_index=True)
+        _zero_classes = [c for c, v in taste_class_counts.items() if v == 0]
+        if _zero_classes:
+            st.error(
+                f"⚠️ These classes have **zero** rows after mapping and will "
+                f"never be predicted: {', '.join(_zero_classes)}. Check the "
+                f"raw 'taste' label spelling/format in the dataset."
+            )
+        _sparse_classes = [c for c, v in taste_class_counts.items() if 0 < v < 10]
+        if _sparse_classes:
+            st.warning(
+                f"⚠️ These classes have very few rows (&lt;10) and will have "
+                f"unreliable precision/recall: {', '.join(_sparse_classes)}."
+            )
+        st.caption(
+            "Row counts across the entire cleaned dataset (train + test combined), "
+            "computed after simplify_taste() mapping and before the train/test split."
+        )
 
         # Per-Class Table
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
