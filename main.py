@@ -1,8 +1,9 @@
 # ==========================================================
 # PepTastePredictor — app.py
 # Hybrid Structural Engine v2 | Light + Dark Mode
-# Real metrics: Taste 70.0% | Solubility 97.5% | Docking R²=0.760
-# Taste classes: Bitter, Salty, Sour, Sweet, Umami (5-class, primary taste)
+# MULTI-LABEL taste model: each peptide can have multiple tastes
+# Taste labels: Bitter, Salty, Sour, Sweet, Umami (binary per taste)
+# Solubility classifier | Docking R² regressor
 # SHAP interpretability integrated
 # ==========================================================
 
@@ -41,11 +42,13 @@ import PeptideBuilder
 from PeptideBuilder import Geometry
 
 from sklearn.ensemble import ExtraTreesClassifier, RandomForestRegressor
+from sklearn.multioutput import MultiOutputClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import (
     accuracy_score, f1_score, mean_squared_error,
     r2_score, confusion_matrix, classification_report,
+    hamming_loss,
 )
 from sklearn.decomposition import PCA
 
@@ -75,22 +78,18 @@ PREDICTIONS_DIR.mkdir(exist_ok=True)
 AA             = "ACDEFGHIKLMNPQRSTVWY"
 ALL_DIPEPTIDES = [a1 + a2 for a1 in AA for a2 in AA]
 
-KD_SCALE = {
-    "A": 1.8,  "C": 2.5,  "D": -3.5, "E": -3.5, "F": 2.8,
-    "G": -0.4, "H": -3.2, "I": 4.5,  "K": -3.9, "L": 3.8,
-    "M": 1.9,  "N": -3.5, "P": -1.6, "Q": -3.5, "R": -4.5,
-    "S": -0.8, "T": -0.7, "V": 4.2,  "W": -0.9, "Y": -1.3,
-}
-
-# ── FIX 1 ─────────────────────────────────────────────────────────────────────
-# Primary taste classes — 5-class model (encoder pre-fitted to this list).
-# "Neutral" is intentionally omitted: the dataset contains zero Neutral-labelled
-# rows, so including it in the encoder causes index mismatches and silently
-# prevents Umami from ever being predicted.
-# Neutral is kept in TASTE_EMOJI below for display purposes only.
-# If you ever add Neutral-labelled rows, simply add "Neutral" back here.
-# ──────────────────────────────────────────────────────────────────────────────
-TASTE_CLASSES = ["Bitter", "Salty", "Sour", "Sweet", "Umami"]
+# ==========================================================
+# KEY DESIGN DECISION — MULTI-LABEL CLASSIFICATION
+# ==========================================================
+# The dataset contains composite labels like "Sour Sweet Umami", "Salty Umami", etc.
+# Nearly ALL Umami rows are composite. Using single-label (pick-one) forces a wrong
+# choice and makes Umami (or other tastes) disappear from predictions entirely.
+#
+# Solution: treat each taste as an INDEPENDENT binary classification problem.
+# One ExtraTreesClassifier per taste, wrapped in MultiOutputClassifier.
+# A peptide can be predicted as Bitter AND Umami simultaneously — matching reality.
+# ==========================================================
+TASTES = ["Bitter", "Salty", "Sour", "Sweet", "Umami"]
 
 TASTE_EMOJI = {
     "Bitter":  "😖",
@@ -98,10 +97,15 @@ TASTE_EMOJI = {
     "Salty":   "🧂",
     "Sour":    "😮‍💨",
     "Umami":   "🍖",
-    "Neutral": "😶",
 }
 
-# Chou-Fasman propensity tables
+KD_SCALE = {
+    "A": 1.8,  "C": 2.5,  "D": -3.5, "E": -3.5, "F": 2.8,
+    "G": -0.4, "H": -3.2, "I": 4.5,  "K": -3.9, "L": 3.8,
+    "M": 1.9,  "N": -3.5, "P": -1.6, "Q": -3.5, "R": -4.5,
+    "S": -0.8, "T": -0.7, "V": 4.2,  "W": -0.9, "Y": -1.3,
+}
+
 CF_HELIX = {
     "A":1.42,"R":0.98,"N":0.67,"D":1.01,"C":0.70,"Q":1.11,"E":1.51,
     "G":0.57,"H":1.00,"I":1.08,"L":1.21,"K":1.16,"M":1.45,"F":1.13,
@@ -177,6 +181,15 @@ section[data-testid="stSidebar"],section[data-testid="stSidebar"] *{color:var(--
   opacity:0.55;margin-bottom:6px;color:var(--text-color) !important;}
 .metric-box-value{font-size:22px;font-weight:800;color:#1a8fd1 !important;}
 .metric-box-sub{font-size:11px;opacity:0.55;margin-top:3px;color:var(--text-color) !important;}
+
+/* Taste badge colours */
+.taste-badge{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;
+  border-radius:20px;font-size:13px;font-weight:700;margin:3px;}
+.taste-Bitter{background:rgba(192,57,43,0.12);border:1.5px solid rgba(192,57,43,0.45);color:#c0392b !important;}
+.taste-Salty{background:rgba(41,128,185,0.12);border:1.5px solid rgba(41,128,185,0.45);color:#1a5276 !important;}
+.taste-Sour{background:rgba(243,156,18,0.12);border:1.5px solid rgba(243,156,18,0.45);color:#b7770d !important;}
+.taste-Sweet{background:rgba(155,89,182,0.12);border:1.5px solid rgba(155,89,182,0.45);color:#7d3c98 !important;}
+.taste-Umami{background:rgba(39,174,96,0.12);border:1.5px solid rgba(39,174,96,0.45);color:#1e8449 !important;}
 
 .engine-badge{display:inline-flex;align-items:center;gap:8px;padding:7px 16px;
   border-radius:20px;font-size:13px;font-weight:700;margin:4px 4px 4px 0;}
@@ -267,7 +280,7 @@ if os.path.exists("logo.png"):
 st.sidebar.markdown("### 🧬 PepTastePredictor")
 st.sidebar.write("AI-driven peptide analysis platform")
 st.sidebar.markdown("""
-- 🎯 Taste prediction (5 classes)
+- 🎯 Multi-label taste prediction (all 5 tastes)
 - 💧 Solubility prediction
 - 🔗 Docking score estimation
 - 🔬 Structural bioinformatics
@@ -285,6 +298,11 @@ st.sidebar.markdown(
     unsafe_allow_html=True,
 )
 st.sidebar.markdown("---")
+st.sidebar.markdown("**Taste Model:**")
+st.sidebar.markdown(
+    "Multi-label · one binary classifier per taste · "
+    "peptides can have multiple simultaneous tastes"
+)
 st.sidebar.info("For academic and research use only")
 
 
@@ -301,7 +319,7 @@ _defaults = {
     "pdf_figures":      [],
     "current_mode":     None,
     "prediction_count": 0,
-    "shap_explainer":   None,
+    "shap_explainers":  {},   # dict: taste -> explainer
 }
 for _k, _v in _defaults.items():
     if _k not in st.session_state:
@@ -372,84 +390,25 @@ def read_uploaded_fasta(uploaded_file) -> list:
     return []
 
 
-# ── FIX 2 ─────────────────────────────────────────────────────────────────────
-# CORRECTED simplify_taste — Umami composites now map to "Umami", and matching
-# is punctuation-agnostic.
-#
-# ROOT CAUSE OF THE ORIGINAL BUG (part A):
-#   The dataset contains rows with "Umami" in the label, but every one of them
-#   is a composite (e.g. "Sour Sweet Umami", "Salty Umami"). The old priority
-#   order (Bitter > Sweet > Salty > Sour > Umami) always found another taste
-#   word first, so Umami received 0 training samples and was never predicted.
-#
-# ROOT CAUSE OF A SECOND, SUBTLER BUG (part B):
-#   The original code tokenised with `str(t).split()`, which only splits on
-#   whitespace. If raw labels use commas, slashes, or trailing punctuation
-#   (e.g. "Sour, Sweet, Umami" or "Bitter."), the punctuation stays glued to
-#   the word ("umami" vs "umami,"), so `words[0] == bt.lower()` and
-#   `"umami" in words` silently fail to match — rows get mis-routed to
-#   "Neutral" and real class coverage shrinks for no good reason.
-#
-# FIX:
-#   1. Tokenise with a regex that extracts letter-only words, so commas,
-#      slashes, periods, and any other punctuation never break a match.
-#   2. For any composite label that contains "Umami", assign "Umami"
-#      immediately (composites without this rule never train on Umami).
-#   3. For composites without Umami, use priority: Bitter > Sour > Salty > Sweet.
-#   4. Single-word labels are matched directly.
-# ──────────────────────────────────────────────────────────────────────────────
-def simplify_taste(taste_series):
+def build_taste_labels(taste_series: pd.Series) -> pd.DataFrame:
     """
-    Map composite taste labels to a single primary taste class.
+    Convert raw taste labels into a binary DataFrame with one column per taste.
 
-    Tokenisation is punctuation-agnostic: "Sour, Sweet, Umami", "Sour/Sweet/Umami",
-    "Bitter." and "BITTER" are all handled identically because tokens are
-    extracted with a letter-only regex before matching, not naive whitespace
-    splitting.
+    Examples:
+        "Bitter"              → Bitter=1, rest=0
+        "Sour Sweet Umami"   → Sour=1, Sweet=1, Umami=1, rest=0
+        "Salty, Umami"       → Salty=1, Umami=1, rest=0
 
-    KEY RULE — Umami composites:
-    Every label containing "Umami" (e.g. "Sour Sweet Umami", "Salty, Umami")
-    is mapped to "Umami". This is intentional: composite Umami rows would
-    otherwise always be outranked by another taste word and Umami would never
-    get trained. Assigning composites-with-Umami to "Umami" gives the model
-    proper 5-class coverage (Bitter · Salty · Sour · Sweet · Umami).
-
-    For composites WITHOUT Umami: priority order Bitter > Sour > Salty > Sweet.
-    Single-word labels are matched directly.
-    Falls back to "Neutral" if no recognised taste word is found.
+    Uses regex word-matching so punctuation (commas, slashes, periods) never
+    prevents a match.
     """
-    base_tastes = ["Bitter", "Sweet", "Salty", "Sour", "Umami", "Neutral"]
-
-    def _map(t):
-        # Letter-only tokenisation: robust to commas, slashes, periods,
-        # hyphens, extra whitespace, etc. "Sour, Sweet, Umami." ->
-        # ["sour", "sweet", "umami"].
-        words = re.findall(r"[a-zA-Z]+", str(t).lower())
-
-        if not words:
-            return "Neutral"
-
-        # Fast path: single unambiguous word
-        if len(words) == 1:
-            for bt in base_tastes:
-                if words[0] == bt.lower():
-                    return bt
-            return "Neutral"
-
-        # Composite containing Umami → always Umami.
-        # Without this rule, "Sour Sweet Umami" → Sweet (wrong),
-        # "Salty Umami" → Salty (wrong), etc. — Umami never gets trained.
-        if "umami" in words:
-            return "Umami"
-
-        # Composite without Umami: deterministic priority order
-        for bt in ["Bitter", "Sour", "Salty", "Sweet"]:
-            if bt.lower() in words:
-                return bt
-
-        return "Neutral"
-
-    return taste_series.apply(_map)
+    result = {}
+    for t in TASTES:
+        pattern = re.compile(r"\b" + t + r"\b", re.IGNORECASE)
+        result[t] = taste_series.apply(
+            lambda x: 1 if pattern.search(str(x)) else 0
+        )
+    return pd.DataFrame(result)
 
 
 def model_features(seq: str) -> dict:
@@ -549,11 +508,15 @@ def prettify_feature(name: str) -> str:
     return name.replace("_", " ").title()
 
 
-def taste_emoji(taste: str) -> str:
-    for k, v in TASTE_EMOJI.items():
-        if k.lower() in taste.lower():
-            return v
-    return "🧬"
+def taste_badges_html(predicted_tastes: list) -> str:
+    """Return HTML badges for a list of predicted taste strings."""
+    if not predicted_tastes:
+        return '<span style="opacity:0.5;font-style:italic;">None detected</span>'
+    badges = ""
+    for t in predicted_tastes:
+        emoji = TASTE_EMOJI.get(t, "🧬")
+        badges += f'<span class="taste-badge taste-{t}">{emoji} {t}</span>'
+    return badges
 
 
 def show_caption(html_text: str):
@@ -1147,35 +1110,38 @@ def ca_rmsd(pdb_text: str):
 
 
 # ==========================================================
-# SECTION 13 — SHAP INTERPRETABILITY
+# SECTION 13 — SHAP INTERPRETABILITY (Multi-label aware)
 # ==========================================================
 
-def compute_shap_values(_model, _X_background, _X_query, feature_names):
+def compute_shap_for_taste(taste_model_single, X_background_np, X_query_np, taste_name):
     """
-    Compute SHAP values using TreeExplainer with interventional perturbation.
-    Explainer is cached in st.session_state to avoid rebuilding each call.
+    Compute SHAP values for one binary taste classifier.
+    Caches explainer per taste in session_state["shap_explainers"][taste_name].
     """
-    if st.session_state.get("shap_explainer") is None:
-        st.session_state["shap_explainer"] = shap.TreeExplainer(
-            _model,
-            data=_X_background,
+    if taste_name not in st.session_state["shap_explainers"]:
+        st.session_state["shap_explainers"][taste_name] = shap.TreeExplainer(
+            taste_model_single,
+            data=X_background_np,
             feature_perturbation="interventional",
         )
+    explainer = st.session_state["shap_explainers"][taste_name]
+    sv = explainer.shap_values(X_query_np)
+    # sv shape: (n_samples, n_features) for binary — take positive class
+    if isinstance(sv, list):
+        sv = sv[1] if len(sv) > 1 else sv[0]
+    elif sv.ndim == 3:
+        sv = sv[:, :, 1]
+    raw_ev = explainer.expected_value
+    if isinstance(raw_ev, (list, np.ndarray)):
+        base_value = float(raw_ev[1]) if len(raw_ev) > 1 else float(raw_ev[0])
+    else:
+        base_value = float(raw_ev)
+    return sv, base_value, explainer
 
-    explainer = st.session_state["shap_explainer"]
-    sv = explainer.shap_values(_X_query)
 
-    if isinstance(sv, np.ndarray):
-        if sv.ndim == 3:
-            sv = [sv[:, :, i] for i in range(sv.shape[2])]
-        elif sv.ndim == 2:
-            sv = [-sv, sv]
-    return sv
-
-
-def plot_shap_bar(shap_vals_class, feature_names, seq, predicted_class, top_n=15):
+def plot_shap_bar(shap_vals, feature_names, seq, taste_name, top_n=15):
     C     = get_plot_colors()
-    vals  = shap_vals_class[0]
+    vals  = shap_vals[0]
     df_sh = pd.DataFrame({
         "feature":    [prettify_feature(f) for f in feature_names],
         "shap_value": vals,
@@ -1183,186 +1149,190 @@ def plot_shap_bar(shap_vals_class, feature_names, seq, predicted_class, top_n=15
     }).sort_values("abs_shap", ascending=False).head(top_n)
 
     colors = [C["accent1"] if v > 0 else C["red"] for v in df_sh["shap_value"]]
-
     fig, ax = plt.subplots(figsize=(9, 6))
     apply_plot_style(fig, [ax])
-    ax.barh(
-        df_sh["feature"][::-1],
-        df_sh["shap_value"][::-1],
-        color=colors[::-1],
-        edgecolor="none",
-    )
+    ax.barh(df_sh["feature"][::-1], df_sh["shap_value"][::-1],
+            color=colors[::-1], edgecolor="none")
     ax.axvline(0, color=C["grid"], linewidth=1.2)
     ax.set_xlabel("SHAP Value  (impact on model output)", fontsize=11, labelpad=10)
     ax.set_title(
-        f"SHAP Feature Contributions — Predicted: {predicted_class}  |  Seq: {seq[:20]}{'…' if len(seq)>20 else ''}",
-        fontsize=12, fontweight="bold", pad=12,
-    )
+        f"SHAP — {taste_name} classifier  |  Seq: {seq[:20]}{'…' if len(seq)>20 else ''}",
+        fontsize=12, fontweight="bold", pad=12)
     plt.tight_layout()
     return fig
 
 
-def plot_shap_waterfall_simple(shap_vals_class, feature_names, base_value,
-                                seq, predicted_class, top_n=10):
-    C    = get_plot_colors()
-    vals = shap_vals_class[0]
-    idx  = np.argsort(np.abs(vals))[::-1][:top_n]
-    idx  = idx[np.argsort(idx)]
-
-    selected_vals  = vals[idx]
-    selected_names = [prettify_feature(feature_names[i]) for i in idx]
-    cumulative     = np.cumsum(selected_vals)
-    starts         = np.concatenate([[base_value], base_value + cumulative[:-1]])
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-    apply_plot_style(fig, [ax])
-    for i, (s, v, n) in enumerate(zip(starts, selected_vals, selected_names)):
-        color = C["accent1"] if v >= 0 else C["red"]
-        ax.barh(i, v, left=s, height=0.6, color=color, edgecolor="none")
-        ax.text(s + v + (0.002 if v >= 0 else -0.002), i,
-                f"{v:+.4f}", va="center",
-                ha="left" if v >= 0 else "right",
-                fontsize=8, color=C["text"])
-
-    ax.axvline(base_value, color=C["orange"], linestyle="--", lw=1.5,
-               label=f"Base value = {base_value:.3f}")
-    ax.set_yticks(range(len(selected_names)))
-    ax.set_yticklabels(selected_names, fontsize=9)
-    ax.set_xlabel("Model Output (probability)", fontsize=11, labelpad=8)
-    ax.set_title(
-        f"SHAP Waterfall — {predicted_class} prediction  |  Seq: {seq[:20]}{'…' if len(seq)>20 else ''}",
-        fontsize=12, fontweight="bold", pad=12,
-    )
-    leg = ax.legend(fontsize=9, facecolor=C["fig_bg"], edgecolor=C["grid"])
-    for t in leg.get_texts():
-        t.set_color(C["text"])
-    plt.tight_layout()
-    return fig
-
-
-def render_shap_analysis(taste_model, X_train_bg, X_query_df,
-                          feature_names, seq, predicted_class, predicted_class_idx):
-    """Full SHAP analysis block: bar chart + waterfall + caption."""
+def render_shap_analysis(taste_multilabel_model, X_train_bg, X_query_df,
+                          feature_names, seq, predicted_tastes):
+    """
+    SHAP analysis for multi-label model.
+    Shows one bar chart per PREDICTED taste (skips unpredicted ones to save time).
+    """
     st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
     st.markdown("## 🧠 SHAP Interpretability")
     st.markdown(
-        '<div class="shap-panel"><h4>🔍 Why did the model predict this taste?</h4>'
-        'SHAP (SHapley Additive exPlanations) decomposes each prediction into '
-        'per-feature contributions. <strong style="color:#1a8fd1;">Blue bars</strong> '
-        'push toward the predicted class; '
+        '<div class="shap-panel"><h4>🔍 Why did the model predict these tastes?</h4>'
+        'SHAP decomposes each binary taste prediction into per-feature contributions. '
+        '<strong style="color:#1a8fd1;">Blue bars</strong> push toward that taste; '
         '<strong style="color:#c0392b;">red bars</strong> push away from it.</div>',
         unsafe_allow_html=True,
     )
 
+    if not predicted_tastes:
+        st.info("No tastes were predicted — SHAP analysis skipped.")
+        return
+
     X_bg_np    = X_train_bg.values.astype(np.float32)
     X_query_np = X_query_df.values.astype(np.float32)
 
-    with st.spinner("Computing SHAP values…"):
-        try:
-            shap_vals = compute_shap_values(
-                taste_model, X_bg_np, X_query_np, tuple(feature_names))
+    estimators = taste_multilabel_model.estimators_  # one per TASTE in TASTES order
 
-            n_shap_classes = len(shap_vals)
-            safe_idx       = min(predicted_class_idx, n_shap_classes - 1)
-            sv_class       = shap_vals[safe_idx]
+    for taste_name in predicted_tastes:
+        taste_idx = TASTES.index(taste_name)
+        single_clf = estimators[taste_idx]
+        with st.spinner(f"Computing SHAP for {taste_name}…"):
+            try:
+                sv, base_value, _ = compute_shap_for_taste(
+                    single_clf, X_bg_np, X_query_np, taste_name)
+                fig_bar = plot_shap_bar(sv, feature_names, seq, taste_name)
+                fname   = f"shap_bar_{taste_name.lower()}.png"
+                save_fig(fig_bar, fname)
+                st.markdown(f"#### {TASTE_EMOJI.get(taste_name,'')} {taste_name}")
+                st.image(fname, use_column_width=True)
 
-            explainer = st.session_state["shap_explainer"]
-            raw_ev = explainer.expected_value
-            if isinstance(raw_ev, (list, np.ndarray)):
-                base_value = float(raw_ev[min(safe_idx, len(raw_ev) - 1)])
-            else:
-                base_value = float(raw_ev)
-
-            fig_bar = plot_shap_bar(sv_class, feature_names, seq, predicted_class)
-            save_fig(fig_bar, "shap_bar.png")
-            st.image("shap_bar.png", use_column_width=True)
-
-            top_features = pd.DataFrame({
-                "feature": [prettify_feature(f) for f in feature_names],
-                "shap":    sv_class[0],
-                "abs":     np.abs(sv_class[0]),
-            }).sort_values("abs", ascending=False).head(3)
-            top3_html = "".join(
-                f"<strong>#{i+1} {r['feature']}</strong> (SHAP={r['shap']:+.4f})<br>"
-                for i, (_, r) in enumerate(top_features.iterrows())
-            ) if not top_features.empty else ""
-
-            show_caption(
-                f"SHAP bar chart for prediction <strong>{predicted_class}</strong> "
-                f"on sequence <em>{seq[:30]}{'…' if len(seq)>30 else ''}</em>.<br><br>"
-                f"Top contributing features:<br>{top3_html}"
-                f"Features with <strong>positive SHAP</strong> increase the probability of "
-                f"{predicted_class}; negative SHAP values reduce it."
-            )
-
-            st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
-            st.markdown("### 📉 SHAP Waterfall Plot")
-            fig_wf = plot_shap_waterfall_simple(
-                sv_class, feature_names, base_value, seq, predicted_class)
-            save_fig(fig_wf, "shap_waterfall.png")
-            st.image("shap_waterfall.png", use_column_width=True)
-            show_caption(
-                f"Waterfall plot showing cumulative SHAP contributions for "
-                f"<strong>{predicted_class}</strong> prediction. "
-                f"Starting from the base value ({base_value:.3f}), each bar shifts "
-                f"the output probability up or down until reaching the final prediction."
-            )
-
-        except Exception as e:
-            st.warning(f"SHAP computation could not complete: {e}")
+                top_features = pd.DataFrame({
+                    "feature": [prettify_feature(f) for f in feature_names],
+                    "shap":    sv[0],
+                    "abs":     np.abs(sv[0]),
+                }).sort_values("abs", ascending=False).head(3)
+                top3_html = "".join(
+                    f"<strong>#{i+1} {r['feature']}</strong> (SHAP={r['shap']:+.4f})<br>"
+                    for i, (_, r) in enumerate(top_features.iterrows())
+                )
+                show_caption(
+                    f"SHAP bar chart for <strong>{taste_name}</strong> prediction "
+                    f"on sequence <em>{seq[:30]}{'…' if len(seq)>30 else ''}</em>.<br><br>"
+                    f"Top contributing features:<br>{top3_html}"
+                    f"<strong>Positive SHAP</strong> increases probability of {taste_name}; "
+                    f"<strong>negative SHAP</strong> reduces it."
+                )
+            except Exception as e:
+                st.warning(f"SHAP for {taste_name} could not complete: {e}")
 
 
 # ==========================================================
 # SECTION 14 — PLOT FUNCTIONS
 # ==========================================================
 
-def plot_pca(X, y_labels, class_names, title="PCA"):
+def plot_pca(X, Y_labels, title="PCA"):
+    """PCA coloured by first positive taste label (multi-label aware)."""
     C       = get_plot_colors()
     pca     = PCA(n_components=2)
     coords  = pca.fit_transform(X)
     v1, v2  = pca.explained_variance_ratio_[:2] * 100
-    palette = _get_cmap("tab10", len(class_names))
+
+    # For each sample, pick first positive taste for colour (or 'None')
+    def primary_taste(row):
+        for i, t in enumerate(TASTES):
+            if row[i] == 1:
+                return t
+        return "None"
+
+    if isinstance(Y_labels, np.ndarray) and Y_labels.ndim == 2:
+        point_tastes = [primary_taste(Y_labels[i]) for i in range(len(Y_labels))]
+    else:
+        point_tastes = ["Unknown"] * len(coords)
+
+    taste_palette = {
+        "Bitter": "#c0392b", "Salty": "#2980b9", "Sour": "#f39c12",
+        "Sweet": "#8e44ad", "Umami": "#27ae60", "None": "#aaaaaa",
+    }
     fig, ax = plt.subplots(figsize=(9, 6))
     apply_plot_style(fig, [ax])
-    for i, cls in enumerate(class_names):
-        mask = y_labels == i
-        ax.scatter(coords[mask, 0], coords[mask, 1], label=cls, alpha=0.75,
-                   s=35, color=palette(i / max(len(class_names)-1, 1)),
-                   edgecolors="none")
+    for t in TASTES + ["None"]:
+        mask = [i for i, pt in enumerate(point_tastes) if pt == t]
+        if mask:
+            ax.scatter(coords[mask, 0], coords[mask, 1], label=t, alpha=0.7,
+                       s=35, color=taste_palette[t], edgecolors="none")
     ax.set_xlabel(f"PC1 ({v1:.1f}%)", fontsize=12, labelpad=10)
     ax.set_ylabel(f"PC2 ({v2:.1f}%)", fontsize=12, labelpad=10)
     ax.set_title(title, fontsize=13, fontweight="bold", pad=12)
-    leg = ax.legend(fontsize=9, bbox_to_anchor=(1.02,1), loc="upper left",
-                    title="Taste class", title_fontsize=9,
-                    facecolor=C["fig_bg"], edgecolor=C["grid"])
-    leg.get_title().set_color(C["text"])
+    C2 = get_plot_colors()
+    leg = ax.legend(fontsize=9, bbox_to_anchor=(1.02, 1), loc="upper left",
+                    title="Primary taste", title_fontsize=9,
+                    facecolor=C2["fig_bg"], edgecolor=C2["grid"])
+    leg.get_title().set_color(C2["text"])
     for t in leg.get_texts():
-        t.set_color(C["text"])
+        t.set_color(C2["text"])
     plt.tight_layout()
     return fig, pca
 
 
-def plot_confusion(y_true, y_pred, class_names, title, cmap):
+def plot_multilabel_per_taste(Y_true, Y_pred):
+    """
+    Per-taste precision/recall/F1 bar chart for the multi-label model.
+    One group of bars per taste.
+    """
     C   = get_plot_colors()
-    cm  = confusion_matrix(y_true, y_pred)
-    acc = accuracy_score(y_true, y_pred)
-    n   = len(class_names)
-    fig, ax = plt.subplots(figsize=(max(6, n * 0.9), max(5, n * 0.75)))
+    metrics_per_taste = []
+    for i, t in enumerate(TASTES):
+        rep = classification_report(
+            Y_true[:, i], Y_pred[:, i],
+            output_dict=True, zero_division=0)
+        pos = rep.get("1", rep.get(1, {}))
+        metrics_per_taste.append({
+            "taste":     t,
+            "precision": pos.get("precision", 0),
+            "recall":    pos.get("recall", 0),
+            "f1":        pos.get("f1-score", 0),
+            "accuracy":  accuracy_score(Y_true[:, i], Y_pred[:, i]),
+        })
+
+    df_m = pd.DataFrame(metrics_per_taste)
+    x    = np.arange(len(TASTES))
+    w    = 0.2
+    fig, ax = plt.subplots(figsize=(11, 5))
     apply_plot_style(fig, [ax])
-    annot_color = "#111122" if not _is_dark_mode() else "#ffffff"
-    sns.heatmap(cm, annot=True, fmt="d", cmap=cmap,
-                xticklabels=class_names, yticklabels=class_names,
-                ax=ax, linewidths=0.4, linecolor=C["grid"],
-                annot_kws={"size": 11, "color": annot_color})
-    ax.set_title(f"{title}  —  Accuracy: {acc*100:.1f}%",
-                 fontsize=14, fontweight="bold", pad=14)
-    ax.set_xlabel("Predicted", fontsize=12, labelpad=10)
-    ax.set_ylabel("True",      fontsize=12, labelpad=10)
-    cbar = ax.collections[0].colorbar
-    cbar.ax.yaxis.label.set_color(C["text"])
-    cbar.ax.tick_params(colors=C["text"])
-    plt.xticks(rotation=45, ha="right", fontsize=9, color=C["tick"])
-    plt.yticks(rotation=0,  fontsize=9, color=C["tick"])
+    ax.bar(x - 1.5*w, df_m["accuracy"],  w, label="Accuracy",  color="#1a56db", alpha=0.85)
+    ax.bar(x - 0.5*w, df_m["precision"], w, label="Precision", color="#12b886", alpha=0.85)
+    ax.bar(x + 0.5*w, df_m["recall"],    w, label="Recall",    color="#e67e22", alpha=0.85)
+    ax.bar(x + 1.5*w, df_m["f1"],        w, label="F1-Score",  color="#9b59b6", alpha=0.85)
+    ax.set_xticks(x)
+    ax.set_xticklabels(TASTES, fontsize=11)
+    ax.set_ylim(0, 1.12)
+    ax.set_ylabel("Score", fontsize=12)
+    ax.set_title("Per-Taste Classification Metrics (Multi-label model)", fontsize=13,
+                 fontweight="bold", pad=12)
+    ax.axhline(1.0, color=C["grid"], lw=0.8, linestyle="--")
+    leg = ax.legend(fontsize=9, facecolor=C["fig_bg"], edgecolor=C["grid"])
+    for t in leg.get_texts():
+        t.set_color(C["text"])
+    plt.tight_layout()
+    return fig, df_m
+
+
+def plot_confusion_per_taste(Y_true, Y_pred):
+    """5-panel confusion matrices, one per taste."""
+    C   = get_plot_colors()
+    fig, axes = plt.subplots(1, 5, figsize=(20, 4))
+    apply_plot_style(fig, axes)
+    taste_colors = {
+        "Bitter": "Reds", "Salty": "Blues", "Sour": "Oranges",
+        "Sweet":  "Purples", "Umami": "Greens",
+    }
+    for i, (ax, t) in enumerate(zip(axes, TASTES)):
+        cm  = confusion_matrix(Y_true[:, i], Y_pred[:, i])
+        acc = accuracy_score(Y_true[:, i], Y_pred[:, i])
+        annot_color = "#111122" if not _is_dark_mode() else "#ffffff"
+        sns.heatmap(cm, annot=True, fmt="d", cmap=taste_colors[t],
+                    xticklabels=[f"¬{t}", t], yticklabels=[f"¬{t}", t],
+                    ax=ax, linewidths=0.5, linecolor=C["grid"],
+                    annot_kws={"size": 10, "color": annot_color})
+        ax.set_title(f"{t}\nacc={acc:.2f}", fontsize=10, fontweight="bold", pad=6)
+        ax.set_xlabel("Predicted", fontsize=9)
+        ax.set_ylabel("True", fontsize=9)
+    plt.suptitle("Per-Taste Confusion Matrices (Multi-label)", fontsize=13,
+                 fontweight="bold", y=1.02)
     plt.tight_layout()
     return fig
 
@@ -1393,19 +1363,21 @@ def plot_docking(y_true, y_pred):
     return fig
 
 
-def plot_feature_importance(model, feature_names, top_n=20):
+def plot_feature_importance(estimators, feature_names, top_n=20):
+    """Average feature importance across all taste estimators."""
     C   = get_plot_colors()
+    all_imp = np.mean([e.feature_importances_ for e in estimators], axis=0)
     imp = pd.DataFrame({
         "Feature":    [prettify_feature(f) for f in feature_names],
-        "Importance": model.feature_importances_,
+        "Importance": all_imp,
     }).sort_values("Importance", ascending=False).head(top_n)
     clrs = _get_cmap("Blues")(np.linspace(0.4, 0.9, len(imp))[::-1])
     fig, ax = plt.subplots(figsize=(8, 7))
     apply_plot_style(fig, [ax])
     ax.barh(imp["Feature"][::-1], imp["Importance"][::-1],
             color=clrs, edgecolor=C["grid"])
-    ax.set_xlabel("Importance Score", fontsize=12, labelpad=10)
-    ax.set_title(f"Top {top_n} Features — Taste Model",
+    ax.set_xlabel("Mean Importance Score (across all taste classifiers)", fontsize=12, labelpad=10)
+    ax.set_title(f"Top {top_n} Features — Multi-label Taste Model",
                  fontsize=13, fontweight="bold", pad=12)
     plt.tight_layout()
     return fig
@@ -1414,7 +1386,7 @@ def plot_feature_importance(model, feature_names, top_n=20):
 def plot_distributions(df):
     C           = get_plot_colors()
     seq_lengths = [len(s) for s in df["peptide"]]
-    tc          = df["taste"].value_counts()
+    taste_counts = {t: int(df[f"label_{t}"].sum()) for t in TASTES}
     grav_vals   = [gravy_score(s) for s in df["peptide"]]
     fig, axes   = plt.subplots(1, 3, figsize=(16, 5))
     apply_plot_style(fig, axes)
@@ -1425,16 +1397,18 @@ def plot_distributions(df):
     axes[0].set_ylabel("Count",       fontsize=11)
     axes[0].set_title("Peptide Length Distribution", fontsize=12, fontweight="bold", pad=10)
     leg0 = axes[0].legend(fontsize=9, facecolor=C["fig_bg"], edgecolor=C["grid"])
-    for t in leg0.get_texts():
-        t.set_color(C["text"])
-    n_cls      = len(tc)
-    cmap_tab10 = _get_cmap("tab10")
-    bar_colors = [cmap_tab10(i / max(n_cls-1, 1)) for i in range(n_cls)]
-    axes[1].barh(tc.index, tc.values, color=bar_colors, edgecolor=C["grid"])
-    axes[1].set_xlabel("Count", fontsize=11)
-    axes[1].set_title("Taste Class Distribution", fontsize=12, fontweight="bold", pad=10)
-    for i, v in enumerate(tc.values):
-        axes[1].text(v + 0.3, i, str(v), va="center", fontsize=9, color=C["text"])
+    for t in leg0.get_texts(): t.set_color(C["text"])
+
+    taste_palette = ["#c0392b","#2980b9","#f39c12","#8e44ad","#27ae60"]
+    bars = axes[1].bar(list(taste_counts.keys()), list(taste_counts.values()),
+                       color=taste_palette, edgecolor=C["grid"])
+    axes[1].set_xlabel("Taste", fontsize=11)
+    axes[1].set_ylabel("# Peptides containing this taste", fontsize=10)
+    axes[1].set_title("Multi-label Taste Coverage", fontsize=12, fontweight="bold", pad=10)
+    for bar, v in zip(bars, taste_counts.values()):
+        axes[1].text(bar.get_x()+bar.get_width()/2, v+1, str(v),
+                     ha="center", fontsize=9, color=C["text"])
+
     axes[2].hist(grav_vals, bins=20, color=C["accent2"], edgecolor=C["grid"], alpha=0.85)
     axes[2].axvline(0, color=C["red"], linestyle="--", lw=2, label="Hydrophilic|Hydrophobic")
     axes[2].axvline(np.mean(grav_vals), color=C["orange"], linestyle="--", lw=2,
@@ -1443,8 +1417,7 @@ def plot_distributions(df):
     axes[2].set_ylabel("Count",  fontsize=11)
     axes[2].set_title("GRAVY Distribution", fontsize=12, fontweight="bold", pad=10)
     leg2 = axes[2].legend(fontsize=8, facecolor=C["fig_bg"], edgecolor=C["grid"])
-    for t in leg2.get_texts():
-        t.set_color(C["text"])
+    for t in leg2.get_texts(): t.set_color(C["text"])
     plt.tight_layout(pad=2.5)
     return fig
 
@@ -1471,8 +1444,7 @@ def plot_ramachandran(phi_psi):
     ax.set_title("Ramachandran Plot", fontsize=13, fontweight="bold", pad=12)
     leg = ax.legend(fontsize=9, loc="upper right",
                     facecolor=C["fig_bg"], edgecolor=C["grid"])
-    for t in leg.get_texts():
-        t.set_color(C["text"])
+    for t in leg.get_texts(): t.set_color(C["text"])
     ax.set_xticks(range(-180, 181, 60))
     ax.set_yticks(range(-180, 181, 60))
     plt.tight_layout()
@@ -1536,8 +1508,7 @@ def plot_plddt(plddt_vals, seq=""):
         ax.set_xticklabels(list(seq), fontsize=8)
     leg = ax.legend(fontsize=8, loc="lower right",
                     facecolor=C["fig_bg"], edgecolor=C["grid"])
-    for t in leg.get_texts():
-        t.set_color(C["text"])
+    for t in leg.get_texts(): t.set_color(C["text"])
     plt.tight_layout()
     return fig
 
@@ -1571,8 +1542,7 @@ def plot_ss_composition(ss_result: dict, seq: str):
     ]
     leg = ax.legend(handles=legend_elements, fontsize=9, loc="upper right",
                     facecolor=C["fig_bg"], edgecolor=C["grid"])
-    for t in leg.get_texts():
-        t.set_color(C["text"])
+    for t in leg.get_texts(): t.set_color(C["text"])
     plt.tight_layout()
     return fig
 
@@ -1584,73 +1554,40 @@ def plot_ss_composition(ss_result: dict, seq: str):
 def caption_distributions(df):
     lengths   = [len(s) for s in df["peptide"]]
     grav      = [gravy_score(s) for s in df["peptide"]]
-    dom_taste = df["taste"].value_counts().idxmax()
-    dom_count = df["taste"].value_counts().max()
-    n_classes = df["taste"].nunique()
     mean_grav = np.mean(grav)
     glabel    = ("slightly hydrophobic" if mean_grav > 0.2 else
                  "slightly hydrophilic" if mean_grav < -0.2 else "amphipathic")
+    taste_summary = " | ".join(
+        f"{t}: {int(df[f'label_{t}'].sum())}" for t in TASTES)
     return (
         f"<strong>Length (left):</strong> {int(np.min(lengths))}–{int(np.max(lengths))} aa, "
         f"mean {np.mean(lengths):.1f} aa.<br><br>"
-        f"<strong>Taste classes (centre):</strong> &ldquo;{dom_taste}&rdquo; is the most common "
-        f"({dom_count} of {len(df)} across {n_classes} classes).<br><br>"
+        f"<strong>Taste coverage (centre — multi-label):</strong> {taste_summary}.<br>"
+        f"Counts exceed total rows because each peptide may have multiple tastes.<br><br>"
         f"<strong>GRAVY (right):</strong> Mean {mean_grav:.2f} — dataset is <strong>{glabel}</strong>."
     )
 
 
-def caption_pca(pca_model, class_names):
+def caption_pca(pca_model):
     v1, v2 = pca_model.explained_variance_ratio_[:2] * 100
     return (
-        f"Each dot is one peptide projected into 2 principal components.<br><br>"
+        f"Each dot is one peptide projected into 2 principal components. "
+        f"Colour = first positive taste label.<br><br>"
         f"<strong>PC1</strong> = {v1:.1f}% variance &nbsp;|&nbsp; "
         f"<strong>PC2</strong> = {v2:.1f}% variance &nbsp;|&nbsp; "
-        f"<strong>Total</strong> = {v1+v2:.1f}%.<br><br>"
-        f"Tight, well-separated clusters indicate reliable class discrimination."
+        f"<strong>Total</strong> = {v1+v2:.1f}%."
     )
 
 
-def caption_confusion_taste(y_true, y_pred, class_names):
-    acc = accuracy_score(y_true, y_pred) * 100
-    cm  = confusion_matrix(y_true, y_pred)
-    cp  = cm.astype(float); np.fill_diagonal(cp, 0)
-    idx = np.unravel_index(np.argmax(cp), cp.shape)
-    pca = cm.diagonal() / cm.sum(axis=1)
+def caption_multilabel_metrics(df_metrics):
+    best  = df_metrics.loc[df_metrics["f1"].idxmax(), "taste"]
+    worst = df_metrics.loc[df_metrics["f1"].idxmin(), "taste"]
+    avg_f1 = df_metrics["f1"].mean()
     return (
-        f"Taste model: <strong>{acc:.1f}% overall accuracy</strong> on held-out test set "
-        f"(stratified 80/20 split).<br><br>"
-        f"Most common confusion: &ldquo;{class_names[idx[0]]}&rdquo; → "
-        f"&ldquo;{class_names[idx[1]]}&rdquo; ({int(cp[idx])} instances).<br>"
-        f"Best class: &ldquo;{class_names[np.argmax(pca)]}&rdquo; | "
-        f"Hardest: &ldquo;{class_names[np.argmin(pca)]}&rdquo;."
-    )
-
-
-def caption_confusion_sol(y_true, y_pred, class_names):
-    acc = accuracy_score(y_true, y_pred) * 100
-    cm  = confusion_matrix(y_true, y_pred)
-    cp  = cm.astype(float); np.fill_diagonal(cp, 0)
-    idx = np.unravel_index(np.argmax(cp), cp.shape)
-    return (
-        f"Solubility model: <strong>{acc:.1f}% accuracy</strong> on held-out test set.<br><br>"
-        f"Most common error: &ldquo;{class_names[idx[0]]}&rdquo; → "
-        f"&ldquo;{class_names[idx[1]]}&rdquo; ({int(cp[idx])} instances)."
-    )
-
-
-def caption_feature_importance(model, feature_names, top_n=20):
-    imp  = pd.DataFrame({"Feature": feature_names, "Importance": model.feature_importances_})
-    imp  = imp.sort_values("Importance", ascending=False).head(top_n)
-    top3 = [(prettify_feature(r["Feature"]), r["Importance"])
-            for _, r in imp.head(3).iterrows()]
-    n_d  = sum(1 for f in imp["Feature"] if f.startswith("DPC_"))
-    n_a  = sum(1 for f in imp["Feature"] if f.startswith("AA_"))
-    note = "Dipeptide context dominates." if n_d > n_a else "Single AA composition dominates."
-    return (
-        f"Top {top_n} features driving taste predictions (Gini impurity decrease).<br><br>"
-        + "".join(f"<strong>#{i+1} {n}</strong> (score: {s:.4f})<br>"
-                  for i, (n, s) in enumerate(top3))
-        + f"<br>{n_d} DPC and {n_a} AA features in top {top_n}. {note}"
+        f"Per-taste binary classification metrics on held-out 20% test set.<br><br>"
+        f"<strong>Mean F1 across tastes:</strong> {avg_f1:.3f}<br>"
+        f"Best taste: <strong>{best}</strong> (F1={df_metrics.loc[df_metrics['taste']==best,'f1'].values[0]:.3f})<br>"
+        f"Most challenging: <strong>{worst}</strong> (F1={df_metrics.loc[df_metrics['taste']==worst,'f1'].values[0]:.3f})"
     )
 
 
@@ -1662,26 +1599,23 @@ def caption_docking(y_true, y_pred):
         f"Test-set docking score predictions. Red dashed = perfect prediction.<br><br>"
         f"<strong>R² = {r2:.3f}</strong> ({qual} fit) — explains {r2*100:.1f}% of score variance.<br>"
         f"<strong>RMSE = {rmse:.2f}</strong> (docking score units).<br>"
-        f"<em>Note: Scores in this dataset are dimensionless energy-function outputs "
-        f"(range: −261 to −43). A proxy regression model is used to enable rapid "
-        f"large-scale screening without running full docking simulations.</em>"
+        f"<em>Scores are dimensionless energy-function outputs (range −261 to −43).</em>"
     )
 
 
 def caption_ramachandran(phi_psi, seq=""):
     if not phi_psi:
-        return ("No φ/ψ angles available — peptide requires ≥3 residues "
-                "with complete backbone atoms.")
+        return "No φ/ψ angles available — peptide requires ≥3 residues with complete backbone atoms."
     n_total = len(phi_psi)
     n_helix = sum(1 for p, s in phi_psi if -180 <= p <= -45 and -75 <= s <= -15)
     n_sheet = sum(1 for p, s in phi_psi if -180 <= p <= -45 and 90  <= s <= 180)
     n_other = n_total - n_helix - n_sheet
     dominant = "α-helix" if n_helix >= n_sheet else "β-sheet"
     return (
-        f"Backbone torsion angles{f' for <strong>{seq[:20]}</strong>' if seq else ''}.<br><br>"
+        f"Backbone torsion angles.<br><br>"
         f"<strong>α-Helix region:</strong> {n_helix/n_total*100:.0f}% | "
         f"<strong>β-Sheet region:</strong> {n_sheet/n_total*100:.0f}% | "
-        f"<strong>Other:</strong> {n_other/n_total*100:.0f}%<br><br>"
+        f"<strong>Other:</strong> {n_other/n_total*100:.0f}%<br>"
         f"Dominant backbone character: <strong>{dominant}</strong>."
     )
 
@@ -1690,61 +1624,28 @@ def caption_distance_map(dist_matrix, seq=""):
     n = dist_matrix.shape[0]
     if n < 2:
         return "Distance map unavailable — structure contains fewer than 2 Cα atoms."
-
     mask   = ~np.eye(n, dtype=bool)
     od     = dist_matrix[mask]
-    d_min  = od.min()
-    d_max  = od.max()
-    d_mean = od.mean()
-
+    d_min, d_max, d_mean = od.min(), od.max(), od.mean()
     sequential = [dist_matrix[i, i + 1] for i in range(n - 1)]
     mean_seq   = float(np.mean(sequential)) if sequential else 3.8
-
-    lr_pairs = [(i, j)
-                for i in range(n)
-                for j in range(i + 4, n)
+    lr_pairs = [(i, j) for i in range(n) for j in range(i + 4, n)
                 if dist_matrix[i, j] < 8.0]
     n_lr = len(lr_pairs)
-
-    n_sr = sum(1 for i in range(n) for j in range(n)
-               if 1 < abs(i - j) <= 3 and dist_matrix[i, j] < 7.0)
-
     max_possible_lr = max(1, (n - 3) * (n - 4) // 2)
     contact_density = n_lr / max_possible_lr
-
     if contact_density > 0.25:
-        shape_note = ("The high density of long-range contacts indicates a "
-                      "<strong>compact, globular-like fold</strong> with substantial "
-                      "tertiary packing between distant residues.")
+        shape_note = "High density of long-range contacts → <strong>compact, globular-like fold</strong>."
     elif n_lr > 0:
-        shape_note = ("The moderate number of long-range contacts suggests the peptide "
-                      "<strong>partially folds back on itself</strong>, forming a loose "
-                      "tertiary arrangement.")
+        shape_note = "Moderate long-range contacts → peptide <strong>partially folds back</strong>."
     else:
-        shape_note = ("The absence of long-range contacts is consistent with an "
-                      "<strong>extended or fully disordered conformation</strong>, "
-                      "typical of short linear peptides in solution.")
-
-    seq_note = (f"Sequence <strong>{seq[:20]}{'…' if len(seq) > 20 else ''}</strong> "
-                f"({n} residues). ") if seq else ""
-
+        shape_note = "No long-range contacts → <strong>extended or disordered conformation</strong>."
     return (
-        f"{seq_note}"
-        f"The heatmap displays pairwise Cα–Cα Euclidean distances (Å) between every "
-        f"residue pair in the peptide backbone. "
-        f"<strong>Dark cells indicate close spatial proximity; bright cells indicate "
-        f"greater separation.</strong> "
-        f"The main diagonal (distance = 0 Å, each residue to itself) always appears "
-        f"as the darkest stripe.<br><br>"
-        f"<strong>Distance range:</strong> {d_min:.1f}–{d_max:.1f} Å "
-        f"(mean {d_mean:.1f} Å across all pairs).<br>"
-        f"<strong>Mean sequential Cα–Cα distance</strong> (adjacent residues): "
-        f"{mean_seq:.2f} Å — the expected value for ideal backbone geometry is ~3.8 Å.<br>"
-        f"<strong>Short-range contacts</strong> (|i−j| = 2–3, d &lt; 7 Å): {n_sr} "
-        f"— characteristic of turns and loop regions in the backbone.<br>"
-        f"<strong>Long-range contacts</strong> (|i−j| &gt; 3, d &lt; 8 Å): {n_lr} "
-        f"(contact density: {contact_density * 100:.1f}% of all possible distant pairs).<br><br>"
-        f"{shape_note}"
+        f"Pairwise Cα–Cα distances (Å). Dark = close, bright = distant.<br><br>"
+        f"<strong>Range:</strong> {d_min:.1f}–{d_max:.1f} Å (mean {d_mean:.1f} Å).<br>"
+        f"<strong>Mean sequential Cα–Cα:</strong> {mean_seq:.2f} Å (ideal ~3.8 Å).<br>"
+        f"<strong>Long-range contacts (d&lt;8Å, |i−j|>3):</strong> {n_lr} "
+        f"(density {contact_density*100:.1f}%). {shape_note}"
     )
 
 
@@ -1770,8 +1671,7 @@ def render_structural_analysis(pdb_text: str, prefix: str = "", seq: str = ""):
                 e_pct = round(ss_result["sheet_frac"] * 100, 1)
                 c_pct = round(ss_result["coil_frac"]  * 100, 1)
                 show_caption(
-                    f"Chou-Fasman secondary-structure prediction for "
-                    f"<strong>{seq[:30]}{'…' if len(seq)>30 else ''}</strong>.<br><br>"
+                    f"Chou-Fasman secondary-structure prediction.<br><br>"
                     f"<strong>α-Helix:</strong> {h_pct}% &nbsp;|&nbsp; "
                     f"<strong>β-Sheet:</strong> {e_pct}% &nbsp;|&nbsp; "
                     f"<strong>Coil/Loop:</strong> {c_pct}%"
@@ -1816,10 +1716,10 @@ def render_structural_analysis(pdb_text: str, prefix: str = "", seq: str = ""):
 
 
 # ==========================================================
-# SECTION 17 — MODEL TRAINING
+# SECTION 17 — MODEL TRAINING  (Multi-label core)
 # ==========================================================
 
-@st.cache_resource(show_spinner="Training models on dataset…")
+@st.cache_resource(show_spinner="Training multi-label taste models on dataset…")
 def train_models():
     if not os.path.exists(DATASET_PATH):
         st.error(f"Dataset not found: {DATASET_PATH}")
@@ -1837,76 +1737,72 @@ def train_models():
 
     df["solubility"] = df["solubility"].str.strip().str.rstrip(".")
 
-    # ── FIX 2: corrected simplify_taste — composites with Umami → Umami,
-    #    punctuation-agnostic matching ──
-    df["taste"] = simplify_taste(df["taste"])
+    # ── MULTI-LABEL TASTE LABELS ───────────────────────────────────────────────
+    # Each peptide gets a binary vector [Bitter, Salty, Sour, Sweet, Umami].
+    # "Sour Sweet Umami" → [0,0,1,1,1]. No information is lost.
+    # This is the ONLY correct approach for this dataset.
+    taste_label_df = build_taste_labels(df["taste"])
+    for t in TASTES:
+        df[f"label_{t}"] = taste_label_df[t].values
 
-    # Keep only rows that mapped to a valid TASTE_CLASSES entry
-    df = df[df["taste"].isin(TASTE_CLASSES)].reset_index(drop=True)
+    # Drop rows where ALL taste labels are 0 (couldn't map any taste)
+    has_any_taste = df[[f"label_{t}" for t in TASTES]].sum(axis=1) > 0
+    df = df[has_any_taste].reset_index(drop=True)
 
-    # ── Diagnostic: per-class row counts after mapping/filtering. ──
-    # Surfaced in the UI (Section 25) so it's easy to visually confirm all
-    # 5 taste classes have non-trivial training coverage instead of trusting
-    # it blindly.
-    class_counts_after_mapping = (
-        df["taste"].value_counts().reindex(TASTE_CLASSES, fill_value=0)
-    )
+    # Label coverage diagnostics
+    label_counts = {t: int(df[f"label_{t}"].sum()) for t in TASTES}
 
     X = build_feature_table(df["peptide"])
-
-    # ── FIX 1: pre-fit LabelEncoder on TASTE_CLASSES (5 real classes) ────
-    # Locks in a fixed, deterministic label→index mapping independent of
-    # which classes happen to appear in the sampled training split.
-    le_taste = LabelEncoder()
-    le_taste.fit(TASTE_CLASSES)
-    y_taste  = le_taste.transform(df["taste"])
+    Y_taste = df[[f"label_{t}" for t in TASTES]].values.astype(int)
 
     le_sol  = LabelEncoder()
     y_sol   = le_sol.fit_transform(df["solubility"])
     y_dock  = df["docking score (kcal/mol)"].values
 
-    # ── FIX 3 — Safety fallback around the stratified split ──────────────
-    # train_test_split(stratify=...) raises ValueError if any class has
-    # fewer than 2 members (it can't put ≥1 sample in both the train and
-    # test side). Rather than letting that crash the whole app, fall back
-    # to a non-stratified split and surface a visible warning so the issue
-    # is obvious instead of silent.
     idx = np.arange(len(X))
-    stratified_ok = True
-    try:
-        tr_idx, te_idx = train_test_split(
-            idx, test_size=0.2, random_state=42, stratify=y_taste)
-    except ValueError:
-        stratified_ok = False
-        tr_idx, te_idx = train_test_split(
-            idx, test_size=0.2, random_state=42, stratify=None)
+    tr_idx, te_idx = train_test_split(idx, test_size=0.2, random_state=42)
 
-    Xtr, Xte       = X.iloc[tr_idx], X.iloc[te_idx]
-    yt_tr, yt_te   = y_taste[tr_idx], y_taste[te_idx]
-    ys_tr, ys_te   = y_sol[tr_idx],   y_sol[te_idx]
-    yd_tr, yd_te   = y_dock[tr_idx],  y_dock[te_idx]
+    Xtr, Xte         = X.iloc[tr_idx], X.iloc[te_idx]
+    Ytr_t, Yte_t     = Y_taste[tr_idx], Y_taste[te_idx]
+    ys_tr, ys_te     = y_sol[tr_idx],   y_sol[te_idx]
+    yd_tr, yd_te     = y_dock[tr_idx],  y_dock[te_idx]
 
-    taste_model = ExtraTreesClassifier(
-        n_estimators=500, class_weight="balanced", random_state=42)
-    sol_model   = ExtraTreesClassifier(
+    # ── TASTE MODEL: MultiOutputClassifier wrapping ExtraTrees ────────────────
+    # One binary ExtraTreesClassifier per taste.  class_weight="balanced"
+    # handles class imbalance within each binary problem.
+    base_clf    = ExtraTreesClassifier(
+        n_estimators=500, class_weight="balanced",
+        random_state=42, n_jobs=-1)
+    taste_model = MultiOutputClassifier(base_clf, n_jobs=1)
+    taste_model.fit(Xtr, Ytr_t)
+
+    sol_model  = ExtraTreesClassifier(
         n_estimators=300, class_weight="balanced", random_state=42)
-    dock_model  = RandomForestRegressor(n_estimators=400, random_state=42)
+    dock_model = RandomForestRegressor(n_estimators=400, random_state=42)
+    sol_model.fit(Xtr,  ys_tr)
+    dock_model.fit(Xtr, yd_tr)
 
-    taste_model.fit(Xtr, yt_tr)
-    sol_model.fit(Xtr,   ys_tr)
-    dock_model.fit(Xtr,  yd_tr)
-
-    taste_preds = taste_model.predict(Xte)
+    Ypred_t     = taste_model.predict(Xte)
     sol_preds   = sol_model.predict(Xte)
     dock_preds  = dock_model.predict(Xte)
 
+    # Per-taste metrics
+    per_taste_acc = {
+        t: accuracy_score(Yte_t[:, i], Ypred_t[:, i])
+        for i, t in enumerate(TASTES)
+    }
+    per_taste_f1 = {
+        t: f1_score(Yte_t[:, i], Ypred_t[:, i], zero_division=0)
+        for i, t in enumerate(TASTES)
+    }
+
     metrics = {
-        "Taste accuracy":      accuracy_score(yt_te, taste_preds),
-        "Taste F1 (weighted)": f1_score(yt_te, taste_preds, average="weighted"),
-        "Solubility accuracy": accuracy_score(ys_te, sol_preds),
-        "Solubility F1":       f1_score(ys_te, sol_preds, average="weighted"),
-        "Docking R²":          r2_score(yd_te, dock_preds),
-        "Docking RMSE":        np.sqrt(mean_squared_error(yd_te, dock_preds)),
+        **{f"Taste Acc — {t}": round(per_taste_acc[t], 4) for t in TASTES},
+        "Hamming Loss (taste)":  round(hamming_loss(Yte_t, Ypred_t), 4),
+        "Solubility accuracy":   accuracy_score(ys_te, sol_preds),
+        "Solubility F1":         f1_score(ys_te, sol_preds, average="weighted"),
+        "Docking R²":            r2_score(yd_te, dock_preds),
+        "Docking RMSE":          np.sqrt(mean_squared_error(yd_te, dock_preds)),
     }
 
     bg_size = min(100, len(Xtr))
@@ -1914,10 +1810,10 @@ def train_models():
     bg_idx  = rng.choice(len(Xtr), bg_size, replace=False)
     X_bg    = Xtr.iloc[bg_idx]
 
-    return (df, X, Xtr, Xte, yt_te, ys_te, yd_te,
+    return (df, X, Xtr, Xte, Ytr_t, Yte_t, ys_te, yd_te,
             taste_model, sol_model, dock_model,
-            le_taste, le_sol, metrics, X_bg,
-            class_counts_after_mapping, stratified_ok)
+            le_sol, metrics, X_bg, label_counts,
+            Ypred_t, sol_preds, dock_preds)
 
 
 # ==========================================================
@@ -1926,22 +1822,35 @@ def train_models():
 
 (
     df_all, X_all, X_train, X_test,
-    yt_test, ys_test, yd_test,
+    Yt_train, Yt_test, ys_test, yd_test,
     taste_model, sol_model, dock_model,
-    le_taste, le_sol, metrics, X_bg,
-    taste_class_counts, stratified_ok,
+    le_sol, metrics, X_bg, label_counts,
+    Yt_pred_test, sol_pred_test, dock_pred_test,
 ) = train_models()
 FEATURE_NAMES = list(X_all.columns)
 
-if not stratified_ok:
-    st.warning(
-        "⚠️ One or more taste classes had too few samples for a stratified "
-        "train/test split, so a plain random split was used instead. "
-        "Check the class-coverage table in **Model Performance & Dataset "
-        "Analytics** below — a class with very few rows will have unreliable "
-        "metrics regardless of split strategy.",
-        icon="⚠️",
-    )
+
+def predict_tastes(Xp: pd.DataFrame) -> tuple:
+    """
+    Run multi-label taste prediction.
+    Returns (list_of_predicted_taste_strings, probability_dict).
+    """
+    Y_pred  = taste_model.predict(Xp)[0]           # binary vector length 5
+    # get_proba from each estimator
+    probas  = {}
+    for i, t in enumerate(TASTES):
+        clf     = taste_model.estimators_[i]
+        proba   = clf.predict_proba(Xp)[0]
+        classes = clf.classes_
+        # probability of class=1
+        if 1 in classes:
+            pos_prob = proba[list(classes).index(1)]
+        else:
+            pos_prob = 0.0
+        probas[t] = round(float(pos_prob) * 100, 1)
+
+    predicted = [TASTES[i] for i in range(len(TASTES)) if Y_pred[i] == 1]
+    return predicted, probas
 
 
 # ==========================================================
@@ -1958,10 +1867,10 @@ def generate_pdf(metrics: dict, prediction: dict, image_paths: list) -> bytes:
     story.append(Paragraph("<b>PepTastePredictor — Analysis Report</b>", styles["Title"]))
     story.append(Spacer(1, 8))
     story.append(Paragraph(
-        "AI-driven peptide taste, solubility, docking and structural analysis. "
+        "AI-driven peptide taste (multi-label), solubility, docking and structural analysis. "
         "Hybrid Structural Engine v2: RCSB PDB → Remote ESMFold → "
         "Peptide Folding Engine → PeptideBuilder. "
-        "SHAP interpretability integrated for mechanistic insight.",
+        "SHAP interpretability integrated.",
         styles["Normal"]))
     story.append(Spacer(1, 14))
 
@@ -2002,26 +1911,11 @@ def generate_pdf(metrics: dict, prediction: dict, image_paths: list) -> bytes:
 
     story.append(Paragraph("<b>Visual Analytics</b>", styles["Heading2"]))
     story.append(Spacer(1, 8))
-    figure_titles = {
-        "distributions":            "Dataset Distributions",
-        "pca_overall":              "PCA Feature Space",
-        "confusion_taste":          "Taste Confusion Matrix",
-        "confusion_solubility":     "Solubility Confusion Matrix",
-        "feature_importance_taste": "Feature Importance (Gini)",
-        "docking_scatter":          "Docking Score: True vs Predicted",
-        "shap_bar":                 "SHAP Feature Contributions",
-        "shap_waterfall":           "SHAP Waterfall Plot",
-        "ss_composition":           "Secondary Structure Profile",
-        "ramachandran":             "Ramachandran Plot",
-        "ca_distance_map":          "Cα Distance Map",
-        "plddt":                    "pLDDT Confidence Profile",
-    }
     for img in image_paths:
         if not img or not os.path.exists(img):
             continue
         basename = os.path.basename(img).replace(".png", "")
-        title    = next((v for k, v in figure_titles.items() if k in basename), basename)
-        story.append(Paragraph(f"<b>{title}</b>", styles["Heading3"]))
+        story.append(Paragraph(f"<b>{basename.replace('_',' ').title()}</b>", styles["Heading3"]))
         try:
             story.append(RLImage(img, width=430, height=270))
         except Exception:
@@ -2046,8 +1940,9 @@ st.markdown("""
 <p>
 Integrated machine learning and structural bioinformatics for peptide taste,
 solubility, docking score estimation, and 3D structure analysis.<br>
-<strong>Taste classes:</strong> Bitter · Salty · Sour · Sweet · Umami (5-class primary-taste model) &nbsp;|&nbsp;
-<strong>SHAP interpretability</strong> for mechanistic insight &nbsp;|&nbsp;
+<strong>Multi-label taste model:</strong> Bitter · Salty · Sour · Sweet · Umami
+— each predicted independently, peptides can carry multiple tastes &nbsp;|&nbsp;
+<strong>SHAP interpretability</strong> &nbsp;|&nbsp;
 <strong>Hybrid Structural Engine v2:</strong>
 RCSB PDB → Remote ESMFold → Chou-Fasman Folder → PeptideBuilder
 </p>
@@ -2074,7 +1969,7 @@ if st.session_state.current_mode != mode:
     st.session_state.pdb_text        = None
     st.session_state.pdb_source      = None
     st.session_state.current_mode    = mode
-    st.session_state.shap_explainer  = None
+    st.session_state.shap_explainers = {}
     _close_all_figs()
 
 
@@ -2126,13 +2021,13 @@ if mode == "Single Peptide Prediction":
         value=True,
     )
     run_shap = st.checkbox(
-        "🧠 Compute SHAP explanations (adds ~5–15 s for first run)",
+        "🧠 Compute SHAP explanations (adds ~5–15 s per predicted taste)",
         value=True,
     )
 
     if st.button("🚀 Run Prediction", type="primary"):
-        st.session_state.pdf_figures = []
-        st.session_state.shap_explainer = None
+        st.session_state.pdf_figures    = []
+        st.session_state.shap_explainers = {}
         _close_all_figs()
 
         if len(seq) < 1:
@@ -2140,31 +2035,30 @@ if mode == "Single Peptide Prediction":
         else:
             Xp = pd.DataFrame([model_features(seq)])
 
-            taste_raw   = taste_model.predict(Xp)[0]
-            taste       = le_taste.inverse_transform([taste_raw])[0]
-            taste_idx   = int(taste_raw)
-            sol         = le_sol.inverse_transform(sol_model.predict(Xp))[0]
-            dock        = dock_model.predict(Xp)[0]
-            emoji       = taste_emoji(taste)
-            taste_proba = taste_model.predict_proba(Xp)[0]
-            sol_proba   = sol_model.predict_proba(Xp)[0]
+            # ── Multi-label taste prediction ──────────────────────────────
+            predicted_tastes, taste_probas = predict_tastes(Xp)
+
+            sol       = le_sol.inverse_transform(sol_model.predict(Xp))[0]
+            dock      = dock_model.predict(Xp)[0]
+            sol_proba = sol_model.predict_proba(Xp)[0]
 
             sol_color  = "#12b886" if "good" in sol.lower() else "#e67e22"
             dock_color = "#12b886" if dock < -180 else ("#f39c12" if dock < -120 else "#c0392b")
             dock_label = ("Strong binder" if dock < -180 else
                           "Moderate binder" if dock < -120 else "Weak binder")
 
+            taste_display = taste_badges_html(predicted_tastes)
+
             st.markdown(f"""
             <div class="card">
               <div class="card-title">
                 <span class="live-indicator"></span>ML Prediction Results
               </div>
+              <div style="margin-bottom:20px;">
+                <div class="metric-box-label" style="margin-bottom:10px;">Predicted Tastes</div>
+                <div>{taste_display}</div>
+              </div>
               <div class="metric-grid">
-                <div class="metric-box">
-                  <div class="metric-box-label">Primary Taste</div>
-                  <div class="metric-box-value">{emoji} {taste}</div>
-                  <div class="metric-box-sub">Confidence: {max(taste_proba)*100:.1f}%</div>
-                </div>
                 <div class="metric-box">
                   <div class="metric-box-label">Solubility</div>
                   <div class="metric-box-value" style="color:{sol_color}!important;">{sol}</div>
@@ -2183,23 +2077,21 @@ if mode == "Single Peptide Prediction":
               </div>
             </div>""", unsafe_allow_html=True)
 
-            # Taste probability breakdown — show all TASTE_CLASSES
-            st.markdown("#### Taste Class Probabilities")
-            # Map model output probabilities to all TASTE_CLASSES positions
-            full_taste_proba = np.zeros(len(le_taste.classes_), dtype=float)
-            # taste_model.classes_ contains integer indices matching le_taste order
-            for model_cls_idx, prob in zip(taste_model.classes_, taste_proba):
-                full_taste_proba[model_cls_idx] = prob
+            # Taste probability table — all 5 tastes always shown
+            st.markdown("#### Taste Probabilities (all 5 tastes)")
             prob_df = pd.DataFrame({
-                "Taste Class": le_taste.classes_,
-                "Probability": [f"{p*100:.1f}%" for p in full_taste_proba],
+                "Taste":       TASTES,
+                "Emoji":       [TASTE_EMOJI[t] for t in TASTES],
+                "Probability": [f"{taste_probas[t]:.1f}%" for t in TASTES],
+                "Predicted":   ["✅ Yes" if t in predicted_tastes else "— No"
+                                for t in TASTES],
             })
             st.dataframe(prob_df, use_container_width=True, hide_index=True)
 
             # Physicochemical table
             st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
             st.markdown("### 📌 Physicochemical Properties")
-            phys     = physicochemical_features(seq)
+            phys      = physicochemical_features(seq)
             phys_rows = "".join(
                 f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in phys.items())
             st.markdown(f"""
@@ -2216,11 +2108,11 @@ if mode == "Single Peptide Prediction":
             for i, (k, v) in enumerate(comp.items()):
                 cols[i].metric(k, f"{v}%")
 
-            # SHAP
+            # SHAP (only for predicted tastes)
             if run_shap:
                 render_shap_analysis(
                     taste_model, X_bg, Xp,
-                    FEATURE_NAMES, seq, taste, taste_idx,
+                    FEATURE_NAMES, seq, predicted_tastes,
                 )
 
             # 3D structure
@@ -2262,16 +2154,17 @@ if mode == "Single Peptide Prediction":
             render_structural_analysis(pdb_text, prefix="single_", seq=seq)
 
             st.session_state.last_prediction = {
-                "Sequence":                 seq[:60] + ("…" if len(seq) > 60 else ""),
-                "Length (aa)":              len(seq),
-                "Predicted primary taste":  taste,
-                "Taste confidence":         f"{max(taste_proba)*100:.1f}%",
-                "Predicted solubility":     sol,
-                "Docking score":            round(dock, 2),
-                "Structure engine":         engine_label,
-                "Predicted fold":           classify_fold(ss_result, seq),
-                "α-Helix fraction":         f"{ss_result['helix_frac']*100:.1f}%",
-                "β-Sheet fraction":         f"{ss_result['sheet_frac']*100:.1f}%",
+                "Sequence":              seq[:60] + ("…" if len(seq) > 60 else ""),
+                "Length (aa)":           len(seq),
+                "Predicted Tastes":      ", ".join(predicted_tastes) or "None",
+                "Taste Probabilities":   " | ".join(
+                    f"{t}:{taste_probas[t]:.1f}%" for t in TASTES),
+                "Predicted Solubility":  sol,
+                "Docking Score":         round(dock, 2),
+                "Structure Engine":      engine_label,
+                "Predicted Fold":        classify_fold(ss_result, seq),
+                "α-Helix Fraction":      f"{ss_result['helix_frac']*100:.1f}%",
+                "β-Sheet Fraction":      f"{ss_result['sheet_frac']*100:.1f}%",
             }
             st.session_state.show_analytics = True
             st.session_state.prediction_count += 1
@@ -2331,20 +2224,24 @@ elif mode == "Batch Peptide Prediction":
         st.info(f"Processing **{total}** valid peptide(s)…")
         progress = st.progress(0, text="Starting…")
 
-        tastes, sols, docks, taste_confs, engines, fold_types = [], [], [], [], [], []
+        all_predicted_tastes = []
+        all_taste_probas     = []
+        sols, docks, engines, fold_types = [], [], [], []
         pdb_files = {}
 
         for i, seq_b in enumerate(batch_seqs):
             try:
                 Xr = pd.DataFrame([model_features(seq_b)])
-                t  = le_taste.inverse_transform(taste_model.predict(Xr))[0]
-                s  = le_sol.inverse_transform(sol_model.predict(Xr))[0]
-                d  = round(dock_model.predict(Xr)[0], 2)
-                tc = round(max(taste_model.predict_proba(Xr)[0]) * 100, 1)
+                pt, tp = predict_tastes(Xr)
+                s      = le_sol.inverse_transform(sol_model.predict(Xr))[0]
+                d      = round(dock_model.predict(Xr)[0], 2)
             except Exception:
-                t, s, d, tc = "Error", "Error", None, None
-            tastes.append(t); sols.append(s)
-            docks.append(d);  taste_confs.append(tc)
+                pt, tp, s, d = [], {t: 0.0 for t in TASTES}, "Error", None
+            all_predicted_tastes.append(", ".join(pt) if pt else "None")
+            all_taste_probas.append(
+                " | ".join(f"{t}:{tp[t]:.1f}%" for t in TASTES))
+            sols.append(s)
+            docks.append(d)
 
             try:
                 ss_b = predict_secondary_structure(seq_b)
@@ -2372,10 +2269,10 @@ elif mode == "Batch Peptide Prediction":
 
         progress.progress(100, text="Done!")
 
-        batch_df["Predicted Taste"]         = tastes
+        batch_df["Predicted Tastes"]        = all_predicted_tastes
+        batch_df["Taste Probabilities"]     = all_taste_probas
         batch_df["Predicted Solubility"]    = sols
         batch_df["Predicted Docking Score"] = docks
-        batch_df["Taste Confidence (%)"]    = taste_confs
         batch_df["Predicted Fold Type"]     = fold_types
         batch_df["Structure Engine"]        = engines
 
@@ -2503,97 +2400,57 @@ if st.session_state.show_analytics:
 
     with st.expander("📊 Model Performance & Dataset Analytics", expanded=False):
 
-        st.markdown("### 📈 Model Performance Metrics")
-
-        # ── Diagnostic: class coverage after label mapping ──
-        st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
-        st.markdown("### 🩺 Taste Class Coverage (after label mapping)")
-        _coverage_df = pd.DataFrame({
-            "Taste Class": taste_class_counts.index,
-            "Rows (full dataset)": taste_class_counts.values,
-            "% of dataset": [
-                f"{v / taste_class_counts.sum() * 100:.1f}%"
-                for v in taste_class_counts.values
-            ],
-        })
-        st.dataframe(_coverage_df, use_container_width=True, hide_index=True)
-        _zero_classes = [c for c, v in taste_class_counts.items() if v == 0]
-        if _zero_classes:
-            st.error(
-                f"⚠️ These classes have **zero** rows after mapping and will "
-                f"never be predicted: {', '.join(_zero_classes)}. Check the "
-                f"raw 'taste' label spelling/format in the dataset."
-            )
-        _sparse_classes = [c for c, v in taste_class_counts.items() if 0 < v < 10]
-        if _sparse_classes:
-            st.warning(
-                f"⚠️ These classes have very few rows (&lt;10) and will have "
-                f"unreliable precision/recall: {', '.join(_sparse_classes)}."
-            )
+        st.markdown("### 🩺 Multi-label Taste Coverage (full dataset)")
+        coverage_rows = []
+        total_rows    = len(df_all)
+        for t in TASTES:
+            cnt = label_counts[t]
+            coverage_rows.append({
+                "Taste":             t,
+                "Emoji":             TASTE_EMOJI[t],
+                "Rows with this taste": cnt,
+                "% of dataset":      f"{cnt/total_rows*100:.1f}%",
+            })
+        st.dataframe(pd.DataFrame(coverage_rows), use_container_width=True, hide_index=True)
         st.caption(
-            "Row counts across the entire cleaned dataset (train + test combined), "
-            "computed after simplify_taste() mapping and before the train/test split."
+            "Counts exceed total rows because each peptide can carry multiple tastes. "
+            "This is the fundamental reason we use multi-label classification."
         )
 
-        # Per-Class Table
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
-        st.markdown("### 📋 Per-Class Taste Classification Metrics (Table 1)")
+        st.markdown("### 📈 Per-Taste Metrics (test set)")
+        fig_metrics, df_metrics = plot_multilabel_per_taste(Yt_test, Yt_pred_test)
+        save_fig(fig_metrics, "per_taste_metrics.png")
+        st.image("per_taste_metrics.png", use_column_width=True)
+        show_caption(caption_multilabel_metrics(df_metrics))
 
-        _taste_preds_report = taste_model.predict(X_test)
-        _report_dict = classification_report(
-            yt_test,
-            _taste_preds_report,
-            labels=list(range(len(le_taste.classes_))),
-            target_names=list(le_taste.classes_),
-            output_dict=True,
-            zero_division=0
-        )
+        st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
+        st.markdown("### 🔲 Per-Taste Confusion Matrices")
+        fig_cms = plot_confusion_per_taste(Yt_test, Yt_pred_test)
+        save_fig(fig_cms, "confusion_per_taste.png")
+        st.image("confusion_per_taste.png", use_column_width=True)
 
-        _rows = []
-        _unique, _counts = np.unique(yt_test, return_counts=True)
-        _count_map = {le_taste.classes_[u]: c for u, c in zip(_unique, _counts)}
-
-        for cls in le_taste.classes_:
-            if cls in _report_dict:
-                _rows.append({
-                    "Taste Class":  cls,
-                    "n (Test)":     _count_map.get(cls, 0),
-                    "Precision":    round(_report_dict[cls]["precision"], 3),
-                    "Recall":       round(_report_dict[cls]["recall"],    3),
-                    "F1-Score":     round(_report_dict[cls]["f1-score"],  3),
-                })
-        _table1_df = pd.DataFrame(_rows)
-        st.dataframe(_table1_df, use_container_width=True, hide_index=True)
-        st.caption("Per-class metrics on held-out 20% test set.")
-
+        # Summary metric boxes
+        hl = hamming_loss(Yt_test, Yt_pred_test)
         st.markdown(f"""
-        <div class="metric-grid" style="margin-bottom:28px;">
+        <div class="metric-grid" style="margin:24px 0;">
+          {"".join(f'''
           <div class="metric-box">
-            <div class="metric-box-label">Taste Accuracy</div>
-            <div class="metric-box-value">{metrics['Taste accuracy']*100:.1f}%</div>
-            <div class="metric-box-sub">5-class primary taste</div>
-          </div>
+            <div class="metric-box-label">{t} Accuracy</div>
+            <div class="metric-box-value">{metrics[f"Taste Acc — {t}"]*100:.1f}%</div>
+          </div>''' for t in TASTES)}
           <div class="metric-box">
-            <div class="metric-box-label">Taste F1</div>
-            <div class="metric-box-value">{metrics['Taste F1 (weighted)']:.3f}</div>
-            <div class="metric-box-sub">Weighted average</div>
+            <div class="metric-box-label">Hamming Loss</div>
+            <div class="metric-box-value">{hl:.4f}</div>
+            <div class="metric-box-sub">Lower is better (0=perfect)</div>
           </div>
           <div class="metric-box">
             <div class="metric-box-label">Solubility Accuracy</div>
             <div class="metric-box-value">{metrics['Solubility accuracy']*100:.1f}%</div>
           </div>
           <div class="metric-box">
-            <div class="metric-box-label">Solubility F1</div>
-            <div class="metric-box-value">{metrics['Solubility F1']:.3f}</div>
-          </div>
-          <div class="metric-box">
             <div class="metric-box-label">Docking R²</div>
             <div class="metric-box-value">{metrics['Docking R²']:.3f}</div>
-          </div>
-          <div class="metric-box">
-            <div class="metric-box-label">Docking RMSE</div>
-            <div class="metric-box-value">{metrics['Docking RMSE']:.2f}</div>
-            <div class="metric-box-sub">score units</div>
           </div>
         </div>""", unsafe_allow_html=True)
 
@@ -2607,47 +2464,26 @@ if st.session_state.show_analytics:
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 🔹 PCA Feature Space")
         fig_pca, pca_model = plot_pca(
-            X_all, le_taste.transform(df_all["taste"]), le_taste.classes_,
-            title="PCA — Peptide Feature Space (by primary taste class)",
+            X_all, Yt_test if len(X_all) == len(Yt_test) else
+            df_all[[f"label_{t}" for t in TASTES]].values,
+            title="PCA — Peptide Feature Space (coloured by primary taste label)",
         )
         save_fig(fig_pca, "pca_overall.png")
         st.image("pca_overall.png", use_column_width=True)
-        show_caption(caption_pca(pca_model, le_taste.classes_))
+        show_caption(caption_pca(pca_model))
 
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
-        st.markdown("### 🔹 Taste Confusion Matrix")
-        taste_preds  = taste_model.predict(X_test)
-        fig_cm_taste = plot_confusion(
-            yt_test, taste_preds, le_taste.classes_,
-            "Taste Confusion Matrix", "Blues")
-        save_fig(fig_cm_taste, "confusion_taste.png")
-        st.image("confusion_taste.png", use_column_width=True)
-        show_caption(caption_confusion_taste(yt_test, taste_preds, le_taste.classes_))
-
-        st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
-        st.markdown("### 🔹 Solubility Confusion Matrix")
-        sol_preds  = sol_model.predict(X_test)
-        fig_cm_sol = plot_confusion(
-            ys_test, sol_preds, le_sol.classes_,
-            "Solubility Confusion Matrix", "Greens")
-        save_fig(fig_cm_sol, "confusion_solubility.png")
-        st.image("confusion_solubility.png", use_column_width=True)
-        show_caption(caption_confusion_sol(ys_test, sol_preds, le_sol.classes_))
-
-        st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
-        st.markdown("### 🔹 Feature Importance (Gini)")
-        fig_imp = plot_feature_importance(taste_model, FEATURE_NAMES, top_n=20)
+        st.markdown("### 🔹 Feature Importance (mean across taste classifiers)")
+        fig_imp = plot_feature_importance(taste_model.estimators_, FEATURE_NAMES, top_n=20)
         save_fig(fig_imp, "feature_importance_taste.png")
         st.image("feature_importance_taste.png", use_column_width=True)
-        show_caption(caption_feature_importance(taste_model, FEATURE_NAMES, top_n=20))
 
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 🔹 Docking Score: True vs Predicted")
-        dock_preds = dock_model.predict(X_test)
-        fig_dock   = plot_docking(yd_test, dock_preds)
+        fig_dock = plot_docking(yd_test, dock_pred_test)
         save_fig(fig_dock, "docking_scatter.png")
         st.image("docking_scatter.png", use_column_width=True)
-        show_caption(caption_docking(yd_test, dock_preds))
+        show_caption(caption_docking(yd_test, dock_pred_test))
 
         _close_all_figs()
 
@@ -2694,7 +2530,7 @@ if st.session_state.show_analytics:
 st.markdown(f"""
 <div class="footer">
 &copy; {date.today().year} &nbsp; <b>PepTastePredictor v2</b><br>
-5-class primary-taste model (Bitter · Salty · Sour · Sweet · Umami) · SHAP interpretability · Hybrid Structural Engine<br>
+Multi-label taste model (Bitter · Salty · Sour · Sweet · Umami) — one binary classifier per taste<br>
 Structure priority: RCSB PDB → Remote ESMFold → Chou-Fasman Folder → PeptideBuilder<br>
 For academic and research use only
 </div>
