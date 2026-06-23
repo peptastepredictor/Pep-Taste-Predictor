@@ -2430,27 +2430,44 @@ if st.session_state.show_analytics:
         save_fig(fig_cms, "confusion_per_taste.png")
         st.image("confusion_per_taste.png", use_column_width=True)
 
-        # Summary metric boxes
+        # ── UPDATED SUMMARY METRIC BOXES ─────────────────────────────────────
+        # Subset accuracy = fraction of samples where ALL 5 taste labels are correct
+        subset_acc = accuracy_score(Yt_test, Yt_pred_test)
         hl = hamming_loss(Yt_test, Yt_pred_test)
+
+        st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
+        st.markdown("### 📋 Overall Model Performance Summary")
         st.markdown(f"""
         <div class="metric-grid" style="margin:24px 0;">
-          {"".join(f'''
           <div class="metric-box">
-            <div class="metric-box-label">{t} Accuracy</div>
-            <div class="metric-box-value">{metrics[f"Taste Acc — {t}"]*100:.1f}%</div>
-          </div>''' for t in TASTES)}
+            <div class="metric-box-label">Taste Model Accuracy</div>
+            <div class="metric-box-value">{subset_acc*100:.1f}%</div>
+            <div class="metric-box-sub">Exact match (all 5 labels correct)</div>
+          </div>
           <div class="metric-box">
             <div class="metric-box-label">Hamming Loss</div>
             <div class="metric-box-value">{hl:.4f}</div>
-            <div class="metric-box-sub">Lower is better (0=perfect)</div>
+            <div class="metric-box-sub">Lower is better (0 = perfect)</div>
           </div>
           <div class="metric-box">
             <div class="metric-box-label">Solubility Accuracy</div>
             <div class="metric-box-value">{metrics['Solubility accuracy']*100:.1f}%</div>
+            <div class="metric-box-sub">Weighted multi-class</div>
+          </div>
+          <div class="metric-box">
+            <div class="metric-box-label">Solubility F1</div>
+            <div class="metric-box-value">{metrics['Solubility F1']:.3f}</div>
+            <div class="metric-box-sub">Weighted F1 score</div>
           </div>
           <div class="metric-box">
             <div class="metric-box-label">Docking R²</div>
             <div class="metric-box-value">{metrics['Docking R²']:.3f}</div>
+            <div class="metric-box-sub">Variance explained</div>
+          </div>
+          <div class="metric-box">
+            <div class="metric-box-label">Docking RMSE</div>
+            <div class="metric-box-value">{metrics['Docking RMSE']:.2f}</div>
+            <div class="metric-box-sub">Score units error</div>
           </div>
         </div>""", unsafe_allow_html=True)
 
@@ -2486,7 +2503,6 @@ if st.session_state.show_analytics:
         show_caption(caption_docking(yd_test, dock_pred_test))
 
         _close_all_figs()
-
 
 # ==========================================================
 # SECTION 26 — PDF DOWNLOAD
