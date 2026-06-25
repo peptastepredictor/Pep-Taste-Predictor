@@ -1319,7 +1319,6 @@ def plot_multilabel_per_taste(Y_true, Y_pred):
     plt.tight_layout()
     return fig, df_m
 
-
 def plot_confusion_per_taste(Y_true, Y_pred):
     """5-panel confusion matrices, one per taste."""
     C   = get_plot_colors()
@@ -1337,14 +1336,13 @@ def plot_confusion_per_taste(Y_true, Y_pred):
                     xticklabels=[f"¬{t}", t], yticklabels=[f"¬{t}", t],
                     ax=ax, linewidths=0.5, linecolor=C["grid"],
                     annot_kws={"size": 10, "color": annot_color})
-    ax.set_title(f"{t}\nacc={acc:.2f}", fontsize=10, fontweight="bold", pad=6)
-    ax.set_xlabel("Predicted", fontsize=9)
-    ax.set_ylabel("True", fontsize=9)
+        ax.set_title(f"{t}\nacc={acc:.2f}", fontsize=10, fontweight="bold", pad=6)
+        ax.set_xlabel("Predicted", fontsize=9)
+        ax.set_ylabel("True", fontsize=9)
     plt.suptitle("Per-Taste Confusion Matrices (Multi-label)", fontsize=13,
                  fontweight="bold", y=1.02)
     plt.tight_layout()
     return fig
-
 
 def plot_docking(y_true, y_pred):
     C    = get_plot_colors()
