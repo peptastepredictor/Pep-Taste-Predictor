@@ -465,6 +465,14 @@ def build_feature_table(seqs) -> pd.DataFrame:
     return pd.DataFrame([model_features(s) for s in seqs]).fillna(0)
 
 
+def build_batch_physicochemical_row(seq: str) -> dict:
+    phys = physicochemical_features(seq)
+    comp = composition_features(seq)
+    row = dict(phys)
+    row.update(comp)
+    return row
+
+
 def physicochemical_features(seq: str) -> dict:
     L = len(seq)
     if L >= 2:
@@ -2415,6 +2423,11 @@ elif mode == "Batch Peptide Prediction":
         batch_df["Predicted Docking Score"] = docks
         batch_df["Predicted Fold Type"]     = fold_types
         batch_df["Structure Engine"]        = engines
+
+        phys_df = pd.DataFrame(
+            [build_batch_physicochemical_row(seq) for seq in batch_seqs]
+        )
+        batch_df = pd.concat([batch_df.reset_index(drop=True), phys_df], axis=1)
 
         st.markdown("### ✅ Batch Results")
         st.dataframe(batch_df, use_container_width=True)
