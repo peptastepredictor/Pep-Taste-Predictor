@@ -324,6 +324,7 @@ _defaults = {
     "current_mode":     None,
     "prediction_count": 0,
     "shap_explainers":  {},   # dict: taste -> explainer
+    "pdf_captions":     {},   # dict: filename -> explanation & inference text for PDF
 }
 for _k, _v in _defaults.items():
     if _k not in st.session_state:
@@ -334,12 +335,14 @@ for _k, _v in _defaults.items():
 # SECTION 6 — UTILITY FUNCTIONS
 # ==========================================================
 
-def save_fig(fig, filename: str):
+def save_fig(fig, filename: str, caption: str = None):
     fig.savefig(filename, dpi=150, bbox_inches="tight")
     plt.close(fig)
     gc.collect()
     if filename not in st.session_state.pdf_figures:
         st.session_state.pdf_figures.append(filename)
+    if caption:
+        st.session_state.pdf_captions[filename] = caption
 
 
 def clean_sequence(seq) -> str:
@@ -1179,6 +1182,33 @@ def plot_shap_bar(shap_vals, feature_names, seq, taste_name, top_n=15):
     return fig
 
 
+def caption_shap(sv, feature_names, seq, taste_name, top_n=3):
+    """Dynamic explanation + inference text for a SHAP bar chart."""
+    vals = sv[0]
+    df_sh = pd.DataFrame({
+        "feature": [prettify_feature(f) for f in feature_names],
+        "shap":    vals,
+        "abs":     np.abs(vals),
+    }).sort_values("abs", ascending=False).head(top_n)
+    top_html = "".join(
+        f"<strong>#{i+1} {r['feature']}</strong> (SHAP={r['shap']:+.4f}, "
+        f"{'pushes toward' if r['shap'] > 0 else 'pushes away from'} {taste_name})<br>"
+        for i, (_, r) in enumerate(df_sh.iterrows())
+    )
+    n_pos = int((vals > 0).sum())
+    n_neg = int((vals < 0).sum())
+    return (
+        f"SHAP bar chart for the <strong>{taste_name}</strong> prediction on sequence "
+        f"<em>{seq[:30]}{'…' if len(seq) > 30 else ''}</em>.<br><br>"
+        f"Top contributing features:<br>{top_html}<br>"
+        f"Across all model features, {n_pos} pushed the prediction toward {taste_name} and "
+        f"{n_neg} pushed away from it. "
+        f"<strong>Inference:</strong> the sequence's {df_sh.iloc[0]['feature'].lower()} is the single "
+        f"strongest driver of this taste call, meaning the model's decision is anchored in a "
+        f"specific, interpretable compositional signal rather than an opaque combination."
+    )
+
+
 def render_shap_analysis(taste_multilabel_model, X_train_bg, X_query_df,
                           feature_names, seq, predicted_tastes):
     """
@@ -1213,26 +1243,11 @@ def render_shap_analysis(taste_multilabel_model, X_train_bg, X_query_df,
                     single_clf, X_bg_np, X_query_np, taste_name)
                 fig_bar = plot_shap_bar(sv, feature_names, seq, taste_name)
                 fname   = f"shap_bar_{taste_name.lower()}.png"
-                save_fig(fig_bar, fname)
+                cap     = caption_shap(sv, feature_names, seq, taste_name)
+                save_fig(fig_bar, fname, caption=cap)
                 st.markdown(f"#### {TASTE_EMOJI.get(taste_name,'')} {taste_name}")
                 st.image(fname, use_column_width=True)
-
-                top_features = pd.DataFrame({
-                    "feature": [prettify_feature(f) for f in feature_names],
-                    "shap":    sv[0],
-                    "abs":     np.abs(sv[0]),
-                }).sort_values("abs", ascending=False).head(3)
-                top3_html = "".join(
-                    f"<strong>#{i+1} {r['feature']}</strong> (SHAP={r['shap']:+.4f})<br>"
-                    for i, (_, r) in enumerate(top_features.iterrows())
-                )
-                show_caption(
-                    f"SHAP bar chart for <strong>{taste_name}</strong> prediction "
-                    f"on sequence <em>{seq[:30]}{'…' if len(seq)>30 else ''}</em>.<br><br>"
-                    f"Top contributing features:<br>{top3_html}"
-                    f"<strong>Positive SHAP</strong> increases probability of {taste_name}; "
-                    f"<strong>negative SHAP</strong> reduces it."
-                )
+                show_caption(cap)
             except Exception as e:
                 st.warning(f"SHAP for {taste_name} could not complete: {e}")
 
@@ -1352,6 +1367,33 @@ def plot_confusion_per_taste(Y_true, Y_pred):
     plt.tight_layout()
     return fig
 
+
+def caption_confusion_per_taste(Y_true, Y_pred):
+    """Dynamic explanation + inference text for the confusion-matrix panel."""
+    rows = []
+    for i, t in enumerate(TASTES):
+        cm = confusion_matrix(Y_true[:, i], Y_pred[:, i])
+        if cm.shape == (2, 2):
+            tn, fp, fn, tp = cm.ravel()
+        else:
+            tn = fp = fn = tp = 0
+        rows.append((t, tn, fp, fn, tp))
+    fp_heavy = max(rows, key=lambda r: r[2])
+    fn_heavy = max(rows, key=lambda r: r[3])
+    return (
+        "Each panel is a 2×2 confusion matrix (True vs Predicted) for one taste's binary "
+        "classifier on the held-out test set.<br><br>"
+        f"<strong>Most false positives:</strong> {fp_heavy[0]} ({fp_heavy[2]} peptides "
+        f"incorrectly flagged as {fp_heavy[0]}).<br>"
+        f"<strong>Most false negatives:</strong> {fn_heavy[0]} ({fn_heavy[3]} true "
+        f"{fn_heavy[0]} peptides missed).<br><br>"
+        "<strong>Inference:</strong> false negatives matter more for a discovery pipeline "
+        "(a real taste-active peptide gets filtered out silently), while false positives mainly "
+        "cost extra downstream validation effort. Tastes with the largest off-diagonal counts "
+        "above are the ones to prioritise for additional training data."
+    )
+
+
 def plot_docking(y_true, y_pred):
     C    = get_plot_colors()
     r2   = r2_score(y_true, y_pred)
@@ -1395,7 +1437,26 @@ def plot_feature_importance(estimators, feature_names, top_n=20):
     ax.set_title(f"Top {top_n} Features — Multi-label Taste Model",
                  fontsize=13, fontweight="bold", pad=12)
     plt.tight_layout()
-    return fig
+    return fig, imp
+
+
+def caption_feature_importance(imp_df, top_n=3):
+    """Dynamic explanation + inference text for the feature-importance chart."""
+    top = imp_df.head(top_n)
+    top_html = "".join(
+        f"<strong>#{i+1} {r['Feature']}</strong> (importance={r['Importance']:.4f})<br>"
+        for i, (_, r) in enumerate(top.iterrows())
+    )
+    dpc_share = imp_df["Feature"].str.startswith("Dipeptide").mean() * 100
+    return (
+        "Ranks each of the 432 model features by its mean importance, averaged across all "
+        "5 taste classifiers (higher bar = the feature moves predictions more, on average).<br><br>"
+        f"Top features overall:<br>{top_html}<br>"
+        f"<strong>Inference:</strong> dipeptide-composition (DPC) features make up "
+        f"{dpc_share:.0f}% of the features shown here, so local sequence context "
+        f"(pairs of adjacent residues) carries more predictive weight than single-residue "
+        f"composition or bulk physicochemical properties for this dataset."
+    )
 
 
 def plot_distributions(df):
@@ -1680,17 +1741,23 @@ def render_structural_analysis(pdb_text: str, prefix: str = "", seq: str = ""):
             st.markdown("### 🎨 Secondary Structure Profile")
             fig_ss = plot_ss_composition(ss_result, seq)
             if fig_ss is not None:
-                save_fig(fig_ss, f"{prefix}ss_composition.png")
-                st.image(f"{prefix}ss_composition.png", use_column_width=True)
                 h_pct = round(ss_result["helix_frac"] * 100, 1)
                 e_pct = round(ss_result["sheet_frac"] * 100, 1)
                 c_pct = round(ss_result["coil_frac"]  * 100, 1)
-                show_caption(
+                dominant_ss = ("α-helical" if h_pct >= e_pct and h_pct >= c_pct else
+                               "β-sheet" if e_pct >= c_pct else "coil/loop-dominated")
+                cap_ss = (
                     f"Chou-Fasman secondary-structure prediction.<br><br>"
                     f"<strong>α-Helix:</strong> {h_pct}% &nbsp;|&nbsp; "
                     f"<strong>β-Sheet:</strong> {e_pct}% &nbsp;|&nbsp; "
-                    f"<strong>Coil/Loop:</strong> {c_pct}%"
+                    f"<strong>Coil/Loop:</strong> {c_pct}%<br><br>"
+                    f"<strong>Inference:</strong> the backbone is predicted to be predominantly "
+                    f"<strong>{dominant_ss}</strong>, which is consistent with the overall fold "
+                    f"classification shown in the Structure Information Panel."
                 )
+                save_fig(fig_ss, f"{prefix}ss_composition.png", caption=cap_ss)
+                st.image(f"{prefix}ss_composition.png", use_column_width=True)
+                show_caption(cap_ss)
 
     st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
     st.markdown("### 📐 Ramachandran Plot")
@@ -1698,17 +1765,19 @@ def render_structural_analysis(pdb_text: str, prefix: str = "", seq: str = ""):
     if not phi_psi:
         st.info("No φ/ψ angles — peptide needs ≥3 residues with complete backbone.")
     fig_rama = plot_ramachandran(phi_psi)
-    save_fig(fig_rama, f"{prefix}ramachandran.png")
+    cap_rama = caption_ramachandran(phi_psi, seq=seq)
+    save_fig(fig_rama, f"{prefix}ramachandran.png", caption=cap_rama)
     st.image(f"{prefix}ramachandran.png", use_column_width=True)
-    show_caption(caption_ramachandran(phi_psi, seq=seq))
+    show_caption(cap_rama)
 
     st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
     st.markdown("### 🗺️ Cα Distance Map")
     dist_map = ca_distance_map(pdb_text)
     fig_dist = plot_distance_map(dist_map, seq=seq)
-    save_fig(fig_dist, f"{prefix}ca_distance_map.png")
+    cap_dist = caption_distance_map(dist_map, seq=seq)
+    save_fig(fig_dist, f"{prefix}ca_distance_map.png", caption=cap_dist)
     st.image(f"{prefix}ca_distance_map.png", use_column_width=True)
-    show_caption(caption_distance_map(dist_map, seq=seq))
+    show_caption(cap_dist)
 
     plddt_vals = _extract_plddt(pdb_text)
     if plddt_vals and max(plddt_vals) > 1.0:
@@ -1737,15 +1806,17 @@ def render_structural_analysis(pdb_text: str, prefix: str = "", seq: str = ""):
 
         render_plddt_legend()
         fig_pl = plot_plddt(plddt_vals, seq=seq)
-        save_fig(fig_pl, f"{prefix}plddt.png")
-        st.image(f"{prefix}plddt.png", use_column_width=True)
+        save_fig_pl_name = f"{prefix}plddt.png"
         mean_pl = np.mean(plddt_vals)
         quality  = ("Very High" if mean_pl >= 90 else "High" if mean_pl >= 70
                     else "Medium" if mean_pl >= 50 else "Low")
-        show_caption(
+        cap_pl = (
             f"<strong>Mean score: {mean_pl:.1f}</strong> — <strong>{quality}</strong>.<br><br>"
             + confidence_note
         )
+        save_fig(fig_pl, save_fig_pl_name, caption=cap_pl)
+        st.image(save_fig_pl_name, use_column_width=True)
+        show_caption(cap_pl)
 
     _close_all_figs()
 
@@ -2022,6 +2093,8 @@ PREDICTION_FIELD_DESCRIPTIONS = {
 }
 
 
+# ── Fallback static description used only if no dynamic explanation +
+# inference caption was captured for a given plot (e.g. old cached figures).
 IMAGE_DESCRIPTIONS = [
     # (substring to match in filename, description)
     ("shap_bar_",              "SHAP bar chart showing which sequence features pushed the model toward "
@@ -2058,8 +2131,22 @@ def _image_description(basename: str) -> str:
     return ""
 
 
+def _html_caption_to_reportlab(html_text: str) -> str:
+    """Convert the app's caption HTML (uses <strong>/<em>/<br>) into markup
+    ReportLab's Paragraph parser understands (<b>/<i>/<br/>)."""
+    if not html_text:
+        return ""
+    txt = html_text
+    txt = txt.replace("<strong>", "<b>").replace("</strong>", "</b>")
+    txt = txt.replace("<em>", "<i>").replace("</em>", "</i>")
+    txt = txt.replace("<br>", "<br/>")
+    txt = txt.replace("&nbsp;", " ")
+    return txt
+
+
 def generate_pdf(metrics: dict, prediction: dict, image_paths: list,
-                 cv_results: dict = None) -> bytes:
+                 cv_results: dict = None, image_captions: dict = None) -> bytes:
+    image_captions = image_captions or {}
     buf    = io.BytesIO()
     styles = getSampleStyleSheet()
     doc    = SimpleDocTemplate(buf, pagesize=A4,
@@ -2084,7 +2171,7 @@ def generate_pdf(metrics: dict, prediction: dict, image_paths: list,
     name_style.fontSize = 9.5
     name_style.leading  = 12
 
-    tbl_data = [["Metric", "Value", "What this means"]] + [
+    tbl_data = [["Metric", "Value", "Explanation"]] + [
         [Paragraph(k, name_style), str(round(v, 4)), Paragraph(_metric_description(k), desc_style)]
         for k, v in metrics.items()
     ]
@@ -2108,7 +2195,7 @@ def generate_pdf(metrics: dict, prediction: dict, image_paths: list,
     if cv_results:
         story.append(Paragraph("<b>5-Fold Cross-Validation Results</b>",
                                styles["Heading2"]))
-        cv_data = [["Taste / Metric", "Mean", "± Std", "What this means"]]
+        cv_data = [["Taste / Metric", "Mean", "± Std", "Explanation"]]
         for t in TASTES:
             cv_data.append([
                 Paragraph(t, name_style),
@@ -2150,7 +2237,7 @@ def generate_pdf(metrics: dict, prediction: dict, image_paths: list,
 
     if prediction:
         story.append(Paragraph("<b>Prediction Results</b>", styles["Heading2"]))
-        pred_data = [["Property", "Value", "What this means"]] + [
+        pred_data = [["Property", "Value", "Explanation"]] + [
             [Paragraph(k, name_style), str(v), Paragraph(PREDICTION_FIELD_DESCRIPTIONS.get(k, ""), desc_style)]
             for k, v in prediction.items()
         ]
@@ -2172,19 +2259,40 @@ def generate_pdf(metrics: dict, prediction: dict, image_paths: list,
 
     story.append(Paragraph("<b>Visual Analytics</b>", styles["Heading2"]))
     story.append(Spacer(1, 8))
+    caption_style = styles["Normal"].clone("caption_style")
+    caption_style.fontSize = 9
+    caption_style.leading  = 13
+    label_style = styles["Normal"].clone("label_style")
+    label_style.fontSize = 9.5
+    label_style.leading  = 12
+    label_style.fontName = "Helvetica-Bold"
+
     for img in image_paths:
         if not img or not os.path.exists(img):
             continue
-        basename = os.path.basename(img).replace(".png", "")
-        story.append(Paragraph(f"<b>{basename.replace('_',' ').title()}</b>", styles["Heading3"]))
+        basename_noext = os.path.basename(img).replace(".png", "")
+        basename        = os.path.basename(img)
+        story.append(Paragraph(f"<b>{basename_noext.replace('_',' ').title()}</b>", styles["Heading3"]))
         try:
             story.append(RLImage(img, width=430, height=270))
         except Exception:
             pass
-        img_desc = _image_description(basename)
-        if img_desc:
-            story.append(Spacer(1, 4))
-            story.append(Paragraph(img_desc, desc_style))
+
+        # Prefer the dynamic, data-driven explanation + inference captured
+        # when the plot was generated; fall back to the static description.
+        dyn_caption = image_captions.get(basename) or image_captions.get(img)
+        if dyn_caption:
+            story.append(Spacer(1, 6))
+            story.append(Paragraph("Explanation &amp; Inference:", label_style))
+            story.append(Spacer(1, 2))
+            story.append(Paragraph(_html_caption_to_reportlab(dyn_caption), caption_style))
+        else:
+            img_desc = _image_description(basename_noext)
+            if img_desc:
+                story.append(Spacer(1, 4))
+                story.append(Paragraph("Explanation:", label_style))
+                story.append(Spacer(1, 2))
+                story.append(Paragraph(img_desc, desc_style))
         story.append(Spacer(1, 20))
 
     story.append(Paragraph(
@@ -2235,6 +2343,7 @@ if st.session_state.current_mode != mode:
     st.session_state.pdb_source      = None
     st.session_state.current_mode    = mode
     st.session_state.shap_explainers = {}
+    st.session_state.pdf_captions    = {}
     _close_all_figs()
 
 
@@ -2293,6 +2402,7 @@ if mode == "Single Peptide Prediction":
     if st.button("🚀 Run Prediction", type="primary"):
         st.session_state.pdf_figures    = []
         st.session_state.shap_explainers = {}
+        st.session_state.pdf_captions    = {}
         _close_all_figs()
 
         if len(seq) < 1:
@@ -2746,15 +2856,18 @@ if st.session_state.show_analytics:
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 📈 Per-Taste Metrics (test set)")
         fig_metrics, df_metrics = plot_multilabel_per_taste(Yt_test, Yt_pred_test)
-        save_fig(fig_metrics, "per_taste_metrics.png")
+        cap_metrics = caption_multilabel_metrics(df_metrics)
+        save_fig(fig_metrics, "per_taste_metrics.png", caption=cap_metrics)
         st.image("per_taste_metrics.png", use_column_width=True)
-        show_caption(caption_multilabel_metrics(df_metrics))
+        show_caption(cap_metrics)
 
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 🔲 Per-Taste Confusion Matrices")
         fig_cms = plot_confusion_per_taste(Yt_test, Yt_pred_test)
-        save_fig(fig_cms, "confusion_per_taste.png")
+        cap_cms = caption_confusion_per_taste(Yt_test, Yt_pred_test)
+        save_fig(fig_cms, "confusion_per_taste.png", caption=cap_cms)
         st.image("confusion_per_taste.png", use_column_width=True)
+        show_caption(cap_cms)
 
         # Summary metric boxes
         hl_test = hamming_loss(Yt_test, Yt_pred_test)
@@ -2783,9 +2896,10 @@ if st.session_state.show_analytics:
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 📊 Dataset Distributions")
         fig_dist = plot_distributions(df_all)
-        save_fig(fig_dist, "distributions.png")
+        cap_dist_all = caption_distributions(df_all)
+        save_fig(fig_dist, "distributions.png", caption=cap_dist_all)
         st.image("distributions.png", use_column_width=True)
-        show_caption(caption_distributions(df_all))
+        show_caption(cap_dist_all)
 
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 🔹 PCA Feature Space")
@@ -2794,22 +2908,26 @@ if st.session_state.show_analytics:
             df_all[[f"label_{t}" for t in TASTES]].values,
             title="PCA — Peptide Feature Space (coloured by primary taste label)",
         )
-        save_fig(fig_pca, "pca_overall.png")
+        cap_pca_txt = caption_pca(pca_model)
+        save_fig(fig_pca, "pca_overall.png", caption=cap_pca_txt)
         st.image("pca_overall.png", use_column_width=True)
-        show_caption(caption_pca(pca_model))
+        show_caption(cap_pca_txt)
 
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 🔹 Feature Importance (mean across taste classifiers)")
-        fig_imp = plot_feature_importance(taste_model.estimators_, FEATURE_NAMES, top_n=20)
-        save_fig(fig_imp, "feature_importance_taste.png")
+        fig_imp, imp_df = plot_feature_importance(taste_model.estimators_, FEATURE_NAMES, top_n=20)
+        cap_imp = caption_feature_importance(imp_df)
+        save_fig(fig_imp, "feature_importance_taste.png", caption=cap_imp)
         st.image("feature_importance_taste.png", use_column_width=True)
+        show_caption(cap_imp)
 
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
         st.markdown("### 🔹 Docking Score: True vs Predicted")
         fig_dock = plot_docking(yd_test, dock_pred_test)
-        save_fig(fig_dock, "docking_scatter.png")
+        cap_dock = caption_docking(yd_test, dock_pred_test)
+        save_fig(fig_dock, "docking_scatter.png", caption=cap_dock)
         st.image("docking_scatter.png", use_column_width=True)
-        show_caption(caption_docking(yd_test, dock_pred_test))
+        show_caption(cap_dock)
 
         _close_all_figs()
 
@@ -2836,6 +2954,7 @@ if st.session_state.show_analytics:
                 st.session_state.last_prediction,
                 figures_ready,
                 cv_results=cv_results,
+                image_captions=st.session_state.pdf_captions,
             )
             st.download_button(
                 label="📥 Download Full Analytics PDF",
