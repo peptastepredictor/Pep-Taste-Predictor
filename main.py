@@ -1198,14 +1198,20 @@ def caption_shap(sv, feature_names, seq, taste_name, top_n=3):
     n_pos = int((vals > 0).sum())
     n_neg = int((vals < 0).sum())
     return (
-        f"SHAP bar chart for the <strong>{taste_name}</strong> prediction on sequence "
-        f"<em>{seq[:30]}{'…' if len(seq) > 30 else ''}</em>.<br><br>"
-        f"Top contributing features:<br>{top_html}<br>"
-        f"Across all model features, {n_pos} pushed the prediction toward {taste_name} and "
+        f"<strong>What this shows:</strong> this chart explains the model's reasoning for "
+        f"one single prediction — why the model called sequence "
+        f"<em>{seq[:30]}{'…' if len(seq) > 30 else ''}</em> <strong>{taste_name}</strong>. "
+        f"Every bar is one property of the peptide (its length, an amino acid, a pair of "
+        f"neighbouring amino acids, etc). Bars pointing right (blue) argued "
+        f"<em>for</em> {taste_name}; bars pointing left (red) argued <em>against</em> it, "
+        f"and longer bars mean a stronger vote.<br><br>"
+        f"<strong>Top contributing features:</strong><br>{top_html}<br>"
+        f"Out of all 432 properties the model looked at, {n_pos} pushed toward {taste_name} and "
         f"{n_neg} pushed away from it. "
-        f"<strong>Inference:</strong> the sequence's {df_sh.iloc[0]['feature'].lower()} is the single "
-        f"strongest driver of this taste call, meaning the model's decision is anchored in a "
-        f"specific, interpretable compositional signal rather than an opaque combination."
+        f"<strong>What it means:</strong> the sequence's {df_sh.iloc[0]['feature'].lower()} is the single "
+        f"biggest reason the model made this call — in plain terms, the {taste_name} prediction "
+        f"isn't a black-box guess, it traces back to a specific, identifiable trait of the "
+        f"peptide's composition that a chemist could sanity-check by eye."
     )
 
 
@@ -1381,16 +1387,20 @@ def caption_confusion_per_taste(Y_true, Y_pred):
     fp_heavy = max(rows, key=lambda r: r[2])
     fn_heavy = max(rows, key=lambda r: r[3])
     return (
-        "Each panel is a 2×2 confusion matrix (True vs Predicted) for one taste's binary "
-        "classifier on the held-out test set.<br><br>"
-        f"<strong>Most false positives:</strong> {fp_heavy[0]} ({fp_heavy[2]} peptides "
-        f"incorrectly flagged as {fp_heavy[0]}).<br>"
-        f"<strong>Most false negatives:</strong> {fn_heavy[0]} ({fn_heavy[3]} true "
-        f"{fn_heavy[0]} peptides missed).<br><br>"
-        "<strong>Inference:</strong> false negatives matter more for a discovery pipeline "
-        "(a real taste-active peptide gets filtered out silently), while false positives mainly "
-        "cost extra downstream validation effort. Tastes with the largest off-diagonal counts "
-        "above are the ones to prioritise for additional training data."
+        "<strong>What this shows:</strong> five side-by-side scorecards, one per taste, "
+        "comparing what the model predicted against the peptide's true, known taste "
+        "on peptides the model never saw during training. Each 2×2 grid splits outcomes into "
+        "four boxes: correctly said 'no', correctly said 'yes', wrongly said 'yes' "
+        "(false alarm), and wrongly said 'no' (missed it).<br><br>"
+        f"<strong>Most false alarms:</strong> {fp_heavy[0]} ({fp_heavy[2]} peptides "
+        f"incorrectly flagged as {fp_heavy[0]} when they weren't).<br>"
+        f"<strong>Most misses:</strong> {fn_heavy[0]} ({fn_heavy[3]} peptides that really "
+        f"were {fn_heavy[0]} but the model didn't catch).<br><br>"
+        "<strong>What it means:</strong> missed peptides matter more for a discovery pipeline, "
+        "since a genuinely taste-active peptide gets filtered out and never looked at again, "
+        "while a false alarm just costs some extra lab time to rule out. Whichever taste has "
+        "the largest off-diagonal numbers above is the one most worth collecting more training "
+        "examples for."
     )
 
 
@@ -1449,13 +1459,16 @@ def caption_feature_importance(imp_df, top_n=3):
     )
     dpc_share = imp_df["Feature"].str.startswith("Dipeptide").mean() * 100
     return (
-        "Ranks each of the 432 model features by its mean importance, averaged across all "
-        "5 taste classifiers (higher bar = the feature moves predictions more, on average).<br><br>"
-        f"Top features overall:<br>{top_html}<br>"
-        f"<strong>Inference:</strong> dipeptide-composition (DPC) features make up "
-        f"{dpc_share:.0f}% of the features shown here, so local sequence context "
-        f"(pairs of adjacent residues) carries more predictive weight than single-residue "
-        f"composition or bulk physicochemical properties for this dataset."
+        "<strong>What this shows:</strong> across all 432 properties the model can look at "
+        "for every peptide, this ranks the ones that matter most, on average, for deciding "
+        "taste — averaged across all 5 taste classifiers. A longer bar means the model leans "
+        "on that property more heavily when making its calls.<br><br>"
+        f"<strong>Top features overall:</strong><br>{top_html}<br>"
+        f"<strong>What it means:</strong> dipeptide-composition (DPC) features — i.e. which "
+        f"pairs of amino acids sit next to each other — make up "
+        f"{dpc_share:.0f}% of the features shown here. In plain terms, taste is driven more by "
+        f"local sequence context (which residues are neighbours) than by the peptide's overall "
+        f"amino-acid makeup or its bulk physicochemical properties."
     )
 
 
@@ -1636,22 +1649,37 @@ def caption_distributions(df):
     taste_summary = " | ".join(
         f"{t}: {int(df[f'label_{t}'].sum())}" for t in TASTES)
     return (
-        f"<strong>Length (left):</strong> {int(np.min(lengths))}–{int(np.max(lengths))} aa, "
-        f"mean {np.mean(lengths):.1f} aa.<br><br>"
+        "<strong>What this shows:</strong> a three-panel snapshot of the whole training "
+        "dataset — how long the peptides are, how many carry each taste label, and whether "
+        "they tend to be water-loving or fat-loving.<br><br>"
+        f"<strong>Length (left):</strong> peptides range {int(np.min(lengths))}–{int(np.max(lengths))} "
+        f"amino acids long, averaging {np.mean(lengths):.1f} aa.<br><br>"
         f"<strong>Taste coverage (centre — multi-label):</strong> {taste_summary}.<br>"
-        f"Counts exceed total rows because each peptide may have multiple tastes.<br><br>"
-        f"<strong>GRAVY (right):</strong> Mean {mean_grav:.2f} — dataset is <strong>{glabel}</strong>."
+        f"Counts exceed total rows because each peptide may have multiple tastes at once.<br><br>"
+        f"<strong>GRAVY / hydrophobicity (right):</strong> mean score {mean_grav:.2f} — "
+        f"positive means more fat-loving (hydrophobic), negative means more water-loving "
+        f"(hydrophilic). This dataset leans <strong>{glabel}</strong> overall.<br><br>"
+        "<strong>What it means:</strong> this gives a sense of what kind of peptides the model "
+        "was trained on, and where its predictions are most trustworthy — sequences that look "
+        "very different in length or hydrophobicity from this range are further outside the "
+        "model's comfort zone."
     )
 
 
 def caption_pca(pca_model):
     v1, v2 = pca_model.explained_variance_ratio_[:2] * 100
     return (
-        f"Each dot is one peptide projected into 2 principal components. "
-        f"Colour = first positive taste label.<br><br>"
-        f"<strong>PC1</strong> = {v1:.1f}% variance &nbsp;|&nbsp; "
-        f"<strong>PC2</strong> = {v2:.1f}% variance &nbsp;|&nbsp; "
-        f"<strong>Total</strong> = {v1+v2:.1f}%."
+        "<strong>What this shows:</strong> every peptide has 432 measured properties, far too "
+        "many to plot at once. PCA squashes them down to the 2 directions that capture the "
+        "most variation between peptides, so each dot here is one peptide placed on a 2D map — "
+        "dots that land close together are chemically similar overall, and the colour shows "
+        "each peptide's primary taste label.<br><br>"
+        f"<strong>PC1</strong> captures {v1:.1f}% of the variation between peptides, and "
+        f"<strong>PC2</strong> captures another {v2:.1f}%, for "
+        f"<strong>{v1+v2:.1f}%</strong> of the total picture in just these two axes.<br><br>"
+        "<strong>What it means:</strong> if same-coloured dots cluster together, it suggests "
+        "peptides with that taste do share a real, learnable chemical signature — which is "
+        "reassuring evidence that the model has something genuine to key off, not noise."
     )
 
 
@@ -1660,10 +1688,20 @@ def caption_multilabel_metrics(df_metrics):
     worst = df_metrics.loc[df_metrics["f1"].idxmin(), "taste"]
     avg_f1 = df_metrics["f1"].mean()
     return (
-        f"Per-taste binary classification metrics on held-out 20% test set.<br><br>"
-        f"<strong>Mean F1 across tastes:</strong> {avg_f1:.3f}<br>"
-        f"Best taste: <strong>{best}</strong> (F1={df_metrics.loc[df_metrics['taste']==best,'f1'].values[0]:.3f})<br>"
-        f"Most challenging: <strong>{worst}</strong> (F1={df_metrics.loc[df_metrics['taste']==worst,'f1'].values[0]:.3f})"
+        "<strong>What this shows:</strong> a report card for each of the 5 taste classifiers, "
+        "tested on peptides held back from training so the scores reflect real predictive "
+        "skill, not memorisation. Four bars per taste: Accuracy (how often it's right overall), "
+        "Precision (when it says 'yes', how often that's correct), Recall (of all the true "
+        "cases, how many it actually catches), and F1 (a single balanced score combining "
+        "precision and recall).<br><br>"
+        f"<strong>Mean F1 across all 5 tastes:</strong> {avg_f1:.3f} (1.0 would be perfect).<br>"
+        f"<strong>Strongest taste:</strong> {best} "
+        f"(F1={df_metrics.loc[df_metrics['taste']==best,'f1'].values[0]:.3f})<br>"
+        f"<strong>Most challenging taste:</strong> {worst} "
+        f"(F1={df_metrics.loc[df_metrics['taste']==worst,'f1'].values[0]:.3f})<br><br>"
+        f"<strong>What it means:</strong> predictions for {best} can be trusted with more "
+        f"confidence, while {worst} calls are more likely to be wrong and may need double-"
+        f"checking — usually because there are fewer training examples of that taste."
     )
 
 
@@ -1672,34 +1710,58 @@ def caption_docking(y_true, y_pred):
     rmse = np.sqrt(mean_squared_error(y_true, y_pred))
     qual = "strong" if r2 >= 0.75 else ("moderate" if r2 >= 0.5 else "weak")
     return (
-        f"Test-set docking score predictions. Red dashed = perfect prediction.<br><br>"
-        f"<strong>R² = {r2:.3f}</strong> ({qual} fit) — explains {r2*100:.1f}% of score variance.<br>"
-        f"<strong>RMSE = {rmse:.2f}</strong> (docking score units).<br>"
-        f"<em>Scores are dimensionless energy-function outputs (range −261 to −43).</em>"
+        "<strong>What this shows:</strong> each dot is one test-set peptide, positioned by "
+        "its real, experimentally-derived docking score (x-axis) against what the model "
+        "predicted (y-axis). The red dashed diagonal is what perfect agreement would look "
+        "like — the closer the dots hug that line, the better the model's predictions "
+        "line up with reality.<br><br>"
+        f"<strong>R² = {r2:.3f}</strong> — a {qual} fit, meaning the model explains "
+        f"{r2*100:.1f}% of why docking scores vary from one peptide to the next.<br>"
+        f"<strong>RMSE = {rmse:.2f}</strong> — on average, predictions are off by about this "
+        f"many docking-score units.<br>"
+        f"<em>Docking scores are dimensionless binding-energy estimates (typical range "
+        f"−261 to −43); more negative generally means stronger predicted binding.</em><br><br>"
+        f"<strong>What it means:</strong> a {qual} fit means the docking-score predictions are "
+        f"{'reliable enough to help prioritise which peptides to test first' if qual != 'weak' else 'a rough starting point only — treat individual predictions with caution'}."
     )
 
 
 def caption_ramachandran(phi_psi, seq=""):
     if not phi_psi:
-        return "No φ/ψ angles available — peptide requires ≥3 residues with complete backbone atoms."
+        return (
+            "<strong>What this shows:</strong> a Ramachandran plot maps each amino acid's pair "
+            "of backbone twist angles (φ, ψ) to reveal whether the peptide backbone folds into "
+            "a helix, a sheet, or something looser.<br><br>"
+            "No angles could be measured here — the peptide needs at least 3 residues with a "
+            "complete backbone to compute this."
+        )
     n_total = len(phi_psi)
     n_helix = sum(1 for p, s in phi_psi if -180 <= p <= -45 and -75 <= s <= -15)
     n_sheet = sum(1 for p, s in phi_psi if -180 <= p <= -45 and 90  <= s <= 180)
     n_other = n_total - n_helix - n_sheet
     dominant = "α-helix" if n_helix >= n_sheet else "β-sheet"
     return (
-        f"Backbone torsion angles.<br><br>"
-        f"<strong>α-Helix region:</strong> {n_helix/n_total*100:.0f}% | "
-        f"<strong>β-Sheet region:</strong> {n_sheet/n_total*100:.0f}% | "
-        f"<strong>Other:</strong> {n_other/n_total*100:.0f}%<br>"
-        f"Dominant backbone character: <strong>{dominant}</strong>."
+        "<strong>What this shows:</strong> every residue's backbone twist is plotted as one "
+        "red dot. The shaded green region marks angle combinations typical of an α-helix, "
+        "blue marks a β-sheet — so where the dots cluster tells you the peptide's structural "
+        "'shape family' at a glance.<br><br>"
+        f"<strong>α-Helix region:</strong> {n_helix/n_total*100:.0f}% of residues | "
+        f"<strong>β-Sheet region:</strong> {n_sheet/n_total*100:.0f}% of residues | "
+        f"<strong>Other/loop:</strong> {n_other/n_total*100:.0f}% of residues<br><br>"
+        f"<strong>What it means:</strong> the backbone is predicted to be predominantly "
+        f"<strong>{dominant}</strong>-like in geometry, which should match the overall fold "
+        f"classification shown in the Structure Information Panel above."
     )
 
 
 def caption_distance_map(dist_matrix, seq=""):
     n = dist_matrix.shape[0]
     if n < 2:
-        return "Distance map unavailable — structure contains fewer than 2 Cα atoms."
+        return (
+            "<strong>What this shows:</strong> a distance map records how far apart every pair "
+            "of residues sits in 3D space, revealing the peptide's overall shape.<br><br>"
+            "Not enough structure was available here — fewer than 2 Cα atoms were found."
+        )
     mask   = ~np.eye(n, dtype=bool)
     od     = dist_matrix[mask]
     d_min, d_max, d_mean = od.min(), od.max(), od.mean()
@@ -1711,17 +1773,24 @@ def caption_distance_map(dist_matrix, seq=""):
     max_possible_lr = max(1, (n - 3) * (n - 4) // 2)
     contact_density = n_lr / max_possible_lr
     if contact_density > 0.25:
-        shape_note = "High density of long-range contacts → <strong>compact, globular-like fold</strong>."
+        shape_note = "the peptide is predicted to fold into a <strong>compact, globular-like shape</strong>, with distant parts of the chain curling back close to each other."
     elif n_lr > 0:
-        shape_note = "Moderate long-range contacts → peptide <strong>partially folds back</strong>."
+        shape_note = "the peptide <strong>partially folds back on itself</strong> — some distant residues come close together, but it isn't tightly compact."
     else:
-        shape_note = "No long-range contacts → <strong>extended or disordered conformation</strong>."
+        shape_note = "the peptide stays in an <strong>extended, string-like or disordered shape</strong>, with no distant parts folding back together."
     return (
-        f"Pairwise Cα–Cα distances (Å). Dark = close, bright = distant.<br><br>"
-        f"<strong>Range:</strong> {d_min:.1f}–{d_max:.1f} Å (mean {d_mean:.1f} Å).<br>"
-        f"<strong>Mean sequential Cα–Cα:</strong> {mean_seq:.2f} Å (ideal ~3.8 Å).<br>"
-        f"<strong>Long-range contacts (d&lt;8Å, |i−j|>3):</strong> {n_lr} "
-        f"(density {contact_density*100:.1f}%). {shape_note}"
+        "<strong>What this shows:</strong> a heatmap of the distance (in Ångströms) between "
+        "every pair of residues in the folded structure. Dark cells mean two residues sit "
+        "close together in 3D; bright cells mean they're far apart — even if they're far apart "
+        "in the sequence, a dark spot off the diagonal means the chain has folded so those "
+        "residues touch.<br><br>"
+        f"<strong>Distance range:</strong> {d_min:.1f}–{d_max:.1f} Å (mean {d_mean:.1f} Å).<br>"
+        f"<strong>Average distance between neighbouring residues:</strong> {mean_seq:.2f} Å "
+        f"(a normal, healthy backbone bond is about 3.8 Å — this confirms the geometry is "
+        f"realistic).<br>"
+        f"<strong>Long-range contacts</strong> (residues far apart in sequence but "
+        f"&lt;8 Å apart in 3D): {n_lr} pairs found (contact density {contact_density*100:.1f}%).<br><br>"
+        f"<strong>What it means:</strong> {shape_note}"
     )
 
 
@@ -1747,13 +1816,18 @@ def render_structural_analysis(pdb_text: str, prefix: str = "", seq: str = ""):
                 dominant_ss = ("α-helical" if h_pct >= e_pct and h_pct >= c_pct else
                                "β-sheet" if e_pct >= c_pct else "coil/loop-dominated")
                 cap_ss = (
-                    f"Chou-Fasman secondary-structure prediction.<br><br>"
-                    f"<strong>α-Helix:</strong> {h_pct}% &nbsp;|&nbsp; "
-                    f"<strong>β-Sheet:</strong> {e_pct}% &nbsp;|&nbsp; "
-                    f"<strong>Coil/Loop:</strong> {c_pct}%<br><br>"
-                    f"<strong>Inference:</strong> the backbone is predicted to be predominantly "
-                    f"<strong>{dominant_ss}</strong>, which is consistent with the overall fold "
-                    f"classification shown in the Structure Information Panel."
+                    "<strong>What this shows:</strong> a residue-by-residue map of the "
+                    "predicted local shape along the peptide's backbone — each position is "
+                    "called either part of a helix (coiled spring), a sheet (flat, extended "
+                    "strand), or a loose coil/loop, using the Chou-Fasman method.<br><br>"
+                    f"<strong>α-Helix:</strong> {h_pct}% of residues &nbsp;|&nbsp; "
+                    f"<strong>β-Sheet:</strong> {e_pct}% of residues &nbsp;|&nbsp; "
+                    f"<strong>Coil/Loop:</strong> {c_pct}% of residues<br><br>"
+                    f"<strong>What it means:</strong> the backbone is predicted to be mostly "
+                    f"<strong>{dominant_ss}</strong>, which should agree with the overall fold "
+                    f"classification shown in the Structure Information Panel above — helices "
+                    f"tend to be more rigid and compact, sheets more extended, and coils more "
+                    f"flexible."
                 )
                 save_fig(fig_ss, f"{prefix}ss_composition.png", caption=cap_ss)
                 st.image(f"{prefix}ss_composition.png", use_column_width=True)
@@ -1788,20 +1862,29 @@ def render_structural_analysis(pdb_text: str, prefix: str = "", seq: str = ""):
         is_genuine_plddt = ("ESMFold" in engine or "RCSB" in engine
                             or "ESM" in engine or "Uploaded" in engine)
 
+        what_this_shows = (
+            "<strong>What this shows:</strong> a bar for every residue, coloured by how "
+            "confident the structure-prediction engine is about that residue's position — "
+            "tall blue bars mean high confidence, short orange/yellow bars mean the model "
+            "is less sure where that part of the chain actually sits."
+        )
+
         if is_genuine_plddt:
             st.markdown("### 📊 pLDDT Confidence Profile")
             confidence_note = (
-                "Per-residue pLDDT confidence from ESMFold/RCSB. "
-                "Regions with pLDDT < 50 are likely intrinsically disordered."
+                "This is genuine per-residue pLDDT confidence from ESMFold/RCSB — a "
+                "well-established, calibrated score. Regions with pLDDT below 50 are likely "
+                "intrinsically disordered (i.e. that part of the peptide doesn't hold one "
+                "fixed shape in reality, not just a modelling limitation)."
             )
         else:
             st.markdown("### 📊 Structural Confidence Profile (Pseudo-Score)")
             confidence_note = (
-                "<strong>Note:</strong> Values shown (α-Helix=85, β-Sheet=75, Coil=55) "
-                "are <em>synthetic proxies</em> assigned by secondary-structure state "
-                "from the Chou-Fasman Folding Engine. These are <strong>NOT</strong> "
-                "equivalent to AlphaFold or ESMFold pLDDT scores and should not be "
-                "interpreted as per-residue prediction confidence."
+                "<strong>Note:</strong> the values shown (α-Helix=85, β-Sheet=75, Coil=55) "
+                "are <em>synthetic proxies</em> assigned by secondary-structure state from the "
+                "in-house Chou-Fasman Folding Engine — they are <strong>NOT</strong> "
+                "equivalent to AlphaFold or ESMFold pLDDT scores, and should be read only as "
+                "a rough structural-type indicator, not as a true confidence measurement."
             )
 
         render_plddt_legend()
@@ -1811,8 +1894,10 @@ def render_structural_analysis(pdb_text: str, prefix: str = "", seq: str = ""):
         quality  = ("Very High" if mean_pl >= 90 else "High" if mean_pl >= 70
                     else "Medium" if mean_pl >= 50 else "Low")
         cap_pl = (
-            f"<strong>Mean score: {mean_pl:.1f}</strong> — <strong>{quality}</strong>.<br><br>"
-            + confidence_note
+            f"{what_this_shows}<br><br>"
+            f"<strong>Mean confidence score: {mean_pl:.1f}</strong> — rated "
+            f"<strong>{quality}</strong>.<br><br>"
+            f"<strong>What it means:</strong> {confidence_note}"
         )
         save_fig(fig_pl, save_fig_pl_name, caption=cap_pl)
         st.image(save_fig_pl_name, use_column_width=True)
@@ -2095,31 +2180,43 @@ PREDICTION_FIELD_DESCRIPTIONS = {
 
 # ── Fallback static description used only if no dynamic explanation +
 # inference caption was captured for a given plot (e.g. old cached figures).
+# Written in plain language: what the plot is, then what it means.
 IMAGE_DESCRIPTIONS = [
     # (substring to match in filename, description)
-    ("shap_bar_",              "SHAP bar chart showing which sequence features pushed the model toward "
-                                "(blue) or away from (red) predicting this specific taste."),
-    ("ss_composition",         "Per-residue secondary-structure prediction (α-helix / β-sheet / coil) across "
-                                "the peptide backbone, from the Chou-Fasman algorithm."),
-    ("ramachandran",           "Ramachandran plot of backbone φ/ψ torsion angles; points falling in the shaded "
-                                "regions indicate α-helix or β-sheet-like backbone geometry."),
-    ("ca_distance_map",        "Heatmap of pairwise Cα–Cα distances between residues; darker regions indicate "
-                                "residues that are close together in 3D space, revealing the peptide's overall shape."),
-    ("plddt",                  "Per-residue structural confidence profile. For ESMFold/RCSB structures this is "
-                                "genuine pLDDT confidence; for in-house-folded structures it is a synthetic proxy "
-                                "score, not a true AlphaFold/ESMFold confidence value."),
-    ("per_taste_metrics",      "Bar chart comparing accuracy, precision, recall, and F1-score for each of the "
-                                "5 taste classifiers on the held-out test set."),
-    ("confusion_per_taste",    "Confusion matrices (one per taste) showing counts of correct and incorrect "
-                                "predictions for each binary taste classifier on the test set."),
-    ("distributions",          "Dataset-wide overview: peptide length distribution, how many peptides carry "
-                                "each taste label, and the distribution of GRAVY hydrophobicity scores."),
-    ("pca_overall",            "2D PCA projection of all peptides' 432-dimensional feature vectors, coloured by "
-                                "their first positive taste label, showing how tastes cluster in feature space."),
-    ("feature_importance",     "Top features (physicochemical properties, amino-acid composition, dipeptide "
-                                "frequencies) ranked by their average importance across all 5 taste classifiers."),
-    ("docking_scatter",        "Scatter plot of true vs. predicted docking scores on the test set; points closer "
-                                "to the red dashed line indicate more accurate predictions."),
+    ("shap_bar_",              "Explains one specific prediction: which sequence features (an amino acid, a "
+                                "pair of neighbouring amino acids, a physicochemical property, etc.) pushed the "
+                                "model toward (blue) or away from (red) predicting this taste, and by how much — "
+                                "so you can see exactly why the model made this call rather than treating it as "
+                                "a black box."),
+    ("ss_composition",         "A residue-by-residue map of the peptide's predicted local shape — each position "
+                                "along the backbone is labelled as part of a helix (coiled spring), a sheet "
+                                "(flat extended strand), or a loose coil/loop, using the Chou-Fasman method."),
+    ("ramachandran",           "Plots each residue's backbone twist angles; points falling in the shaded green "
+                                "or blue regions indicate helix-like or sheet-like backbone geometry, giving a "
+                                "quick visual read on the peptide's overall structural class."),
+    ("ca_distance_map",        "A heatmap of how far apart every pair of residues sits in 3D space; darker "
+                                "regions mean residues are close together, which reveals whether the peptide "
+                                "folds into a compact ball, partially folds back on itself, or stays extended."),
+    ("plddt",                  "A per-residue confidence profile for the predicted 3D structure. For "
+                                "ESMFold/RCSB structures this is genuine pLDDT confidence; for in-house-folded "
+                                "structures it is a synthetic proxy score only, not a true AlphaFold/ESMFold "
+                                "confidence value."),
+    ("per_taste_metrics",      "A report card comparing accuracy, precision, recall, and F1-score for each of "
+                                "the 5 taste classifiers on peptides the model never saw during training — shows "
+                                "which tastes the model predicts reliably and which are harder."),
+    ("confusion_per_taste",    "Five scorecards (one per taste) showing exactly how many predictions were "
+                                "correct, how many were false alarms, and how many true cases were missed."),
+    ("distributions",          "A dataset-wide overview: how long the training peptides are, how many carry "
+                                "each taste label, and how water-loving vs fat-loving they tend to be."),
+    ("pca_overall",            "Squashes each peptide's 432 measured properties down to a simple 2D map, "
+                                "coloured by taste, so you can see at a glance whether peptides sharing a taste "
+                                "also share a chemical 'neighbourhood'."),
+    ("feature_importance",     "Ranks which of the 432 model features (physicochemical properties, amino-acid "
+                                "makeup, or pairs of neighbouring residues) matter most, on average, for the "
+                                "model's taste decisions."),
+    ("docking_scatter",        "Plots true vs. predicted docking scores for test-set peptides; points closer to "
+                                "the diagonal line mean the model's binding-strength predictions are more "
+                                "accurate."),
 ]
 
 
@@ -2828,10 +2925,18 @@ if st.session_state.show_analytics:
         </div>""", unsafe_allow_html=True)
 
         show_caption(
-            "5-fold stratified cross-validation (random_state=42, stratified on Bitter label). "
-            "Mean ± std across 5 folds confirms model stability. "
-            f"Sour shows highest variance (F1 std={cv_results['Sour']['std_f1']:.3f}), consistent with its smaller "
-            f"representation. All other tastes show low variance (std ≤ 0.056)."
+            "<strong>What this shows:</strong> a robustness check. Instead of testing the model "
+            "on just one held-out slice of data, it retrains and re-tests it 5 separate times on "
+            "5 different slices, then reports the average score and how much that score wobbles "
+            "from one slice to another (± std). A model that's just gotten lucky on one test set "
+            "would show up here as unstable.<br><br>"
+            "5-fold stratified cross-validation (random_state=42, stratified on the Bitter label). "
+            "The mean ± std across all 5 folds confirms the model is stable rather than a "
+            "one-off result. "
+            f"<strong>What it means:</strong> Sour shows the highest variance "
+            f"(F1 std={cv_results['Sour']['std_f1']:.3f}), consistent with having fewer training "
+            f"examples to learn from, while every other taste stays low-variance (std ≤ 0.056) — "
+            f"i.e. reliably consistent no matter which slice of data it's tested on."
         )
 
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
