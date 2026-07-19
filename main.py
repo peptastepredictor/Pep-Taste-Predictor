@@ -3080,7 +3080,7 @@ if st.session_state.show_analytics:
 
 st.markdown(f"""
 <div class="footer">
-&copy; {date.today().year} &nbsp; <b>PepTastePredictor v2</b><br>
+&copy; {date.today().year} &nbsp; <b>PepTastePredictor </b><br>
 Multi-label taste model (Bitter · Salty · Sour · Sweet · Umami) — one binary classifier per taste<br>
 Structure priority: RCSB PDB → Remote ESMFold → Chou-Fasman Folder → PeptideBuilder<br>
 For academic and research use only
