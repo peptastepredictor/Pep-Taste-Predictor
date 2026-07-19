@@ -1964,6 +1964,100 @@ def predict_tastes(Xp: pd.DataFrame) -> tuple:
 # SECTION 19 — PDF REPORT ENGINE
 # ==========================================================
 
+# ── Plain-language descriptions for everything the PDF report shows ────────
+# These exist purely so a reader unfamiliar with the pipeline can understand
+# each metric, prediction field, and chart without needing the live app.
+
+METRIC_DESCRIPTIONS = {
+    "Hamming Loss (taste)": "Average fraction of the 5 taste labels (Bitter/Salty/Sour/Sweet/Umami) that were "
+                             "mispredicted per peptide on the held-out test set. 0 = perfect, higher = worse.",
+    "Solubility accuracy":  "Fraction of test-set peptides whose solubility class was predicted correctly.",
+    "Solubility F1":        "Weighted F1-score (balances precision and recall) for solubility classification "
+                             "across all solubility classes.",
+    "Docking R²":           "Proportion of variance in true docking scores explained by the model's predictions "
+                             "on the test set. Closer to 1.0 is better.",
+    "Docking RMSE":         "Root-mean-squared error between predicted and true docking scores (same units as "
+                             "the docking score). Lower is better.",
+}
+
+
+def _metric_description(key: str) -> str:
+    if key.startswith("Taste Acc"):
+        taste = key.split("—")[-1].strip()
+        return (f"Fraction of test-set peptides correctly classified as having, or not having, "
+                 f"the {taste} taste (independent binary classifier for {taste}).")
+    return METRIC_DESCRIPTIONS.get(key, "")
+
+
+CV_ROW_DESCRIPTIONS = {
+    "Hamming Loss": "5-fold average of the taste Hamming Loss described above, with the fold-to-fold "
+                     "standard deviation — shows how stable the taste model is across different data splits.",
+    "Solubility Acc": "5-fold average solubility classification accuracy, with fold-to-fold standard deviation.",
+    "Docking R²":     "5-fold average docking-score R², with fold-to-fold standard deviation.",
+}
+
+
+def _cv_row_description(label: str) -> str:
+    if label in TASTES:
+        return (f"5-fold cross-validated F1-score for the {label} taste classifier, with standard deviation "
+                 f"across folds — a robustness check beyond the single train/test split above.")
+    return CV_ROW_DESCRIPTIONS.get(label, "")
+
+
+PREDICTION_FIELD_DESCRIPTIONS = {
+    "Sequence":             "The peptide's amino-acid sequence (single-letter code) that was analysed.",
+    "Length (aa)":          "Number of amino-acid residues in the peptide.",
+    "Predicted Tastes":     "Taste(s) the multi-label model predicted for this peptide; a peptide can carry "
+                             "more than one taste at once.",
+    "Taste Probabilities":  "Model-estimated probability (%) that the peptide exhibits each of the 5 tastes.",
+    "Predicted Solubility": "Predicted solubility class (e.g. Good/Poor) for the peptide.",
+    "Docking Score":        "Predicted molecular docking score (kcal/mol-scale energy units); more negative "
+                             "generally indicates stronger predicted binding.",
+    "Structure Engine":     "Which engine in the Hybrid Structural Engine (RCSB PDB, Remote ESMFold, "
+                             "Chou-Fasman Folding Engine, or PeptideBuilder) produced the 3D structure.",
+    "Predicted Fold":       "Overall fold classification (e.g. All-α Helix, All-β Sheet) derived from the "
+                             "secondary-structure prediction.",
+    "α-Helix Fraction":     "Percentage of residues predicted to be in an α-helix conformation.",
+    "β-Sheet Fraction":     "Percentage of residues predicted to be in a β-sheet conformation.",
+}
+
+
+IMAGE_DESCRIPTIONS = [
+    # (substring to match in filename, description)
+    ("shap_bar_",              "SHAP bar chart showing which sequence features pushed the model toward "
+                                "(blue) or away from (red) predicting this specific taste."),
+    ("ss_composition",         "Per-residue secondary-structure prediction (α-helix / β-sheet / coil) across "
+                                "the peptide backbone, from the Chou-Fasman algorithm."),
+    ("ramachandran",           "Ramachandran plot of backbone φ/ψ torsion angles; points falling in the shaded "
+                                "regions indicate α-helix or β-sheet-like backbone geometry."),
+    ("ca_distance_map",        "Heatmap of pairwise Cα–Cα distances between residues; darker regions indicate "
+                                "residues that are close together in 3D space, revealing the peptide's overall shape."),
+    ("plddt",                  "Per-residue structural confidence profile. For ESMFold/RCSB structures this is "
+                                "genuine pLDDT confidence; for in-house-folded structures it is a synthetic proxy "
+                                "score, not a true AlphaFold/ESMFold confidence value."),
+    ("per_taste_metrics",      "Bar chart comparing accuracy, precision, recall, and F1-score for each of the "
+                                "5 taste classifiers on the held-out test set."),
+    ("confusion_per_taste",    "Confusion matrices (one per taste) showing counts of correct and incorrect "
+                                "predictions for each binary taste classifier on the test set."),
+    ("distributions",          "Dataset-wide overview: peptide length distribution, how many peptides carry "
+                                "each taste label, and the distribution of GRAVY hydrophobicity scores."),
+    ("pca_overall",            "2D PCA projection of all peptides' 432-dimensional feature vectors, coloured by "
+                                "their first positive taste label, showing how tastes cluster in feature space."),
+    ("feature_importance",     "Top features (physicochemical properties, amino-acid composition, dipeptide "
+                                "frequencies) ranked by their average importance across all 5 taste classifiers."),
+    ("docking_scatter",        "Scatter plot of true vs. predicted docking scores on the test set; points closer "
+                                "to the red dashed line indicate more accurate predictions."),
+]
+
+
+def _image_description(basename: str) -> str:
+    name = basename.lower()
+    for key, desc in IMAGE_DESCRIPTIONS:
+        if key in name:
+            return desc
+    return ""
+
+
 def generate_pdf(metrics: dict, prediction: dict, image_paths: list,
                  cv_results: dict = None) -> bytes:
     buf    = io.BytesIO()
@@ -1983,8 +2077,18 @@ def generate_pdf(metrics: dict, prediction: dict, image_paths: list,
     story.append(Spacer(1, 14))
 
     story.append(Paragraph("<b>Model Performance</b>", styles["Heading2"]))
-    tbl_data = [["Metric", "Value"]] + [[k, str(round(v, 4))] for k, v in metrics.items()]
-    tbl = Table(tbl_data, colWidths=[280, 150])
+    desc_style = styles["Normal"].clone("desc_style")
+    desc_style.fontSize = 8.5
+    desc_style.leading  = 11
+    name_style = styles["Normal"].clone("name_style")
+    name_style.fontSize = 9.5
+    name_style.leading  = 12
+
+    tbl_data = [["Metric", "Value", "What this means"]] + [
+        [Paragraph(k, name_style), str(round(v, 4)), Paragraph(_metric_description(k), desc_style)]
+        for k, v in metrics.items()
+    ]
+    tbl = Table(tbl_data, colWidths=[150, 60, 250])
     tbl.setStyle(TableStyle([
         ("BACKGROUND",     (0,0), (-1,0),  rl_colors.HexColor("#1f3c88")),
         ("TEXTCOLOR",      (0,0), (-1,0),  rl_colors.white),
@@ -1993,6 +2097,7 @@ def generate_pdf(metrics: dict, prediction: dict, image_paths: list,
                                             rl_colors.white]),
         ("GRID",           (0,0), (-1,-1), 0.5, rl_colors.HexColor("#cccccc")),
         ("FONTSIZE",       (0,1), (-1,-1), 10),
+        ("VALIGN",         (0,0), (-1,-1), "TOP"),
         ("TOPPADDING",     (0,0), (-1,-1), 6),
         ("BOTTOMPADDING",  (0,0), (-1,-1), 6),
     ]))
@@ -2003,35 +2108,40 @@ def generate_pdf(metrics: dict, prediction: dict, image_paths: list,
     if cv_results:
         story.append(Paragraph("<b>5-Fold Cross-Validation Results</b>",
                                styles["Heading2"]))
-        cv_data = [["Taste / Metric", "Mean", "± Std"]]
+        cv_data = [["Taste / Metric", "Mean", "± Std", "What this means"]]
         for t in TASTES:
             cv_data.append([
-                t,
+                Paragraph(t, name_style),
                 str(cv_results[t]["mean_f1"]),
                 str(cv_results[t]["std_f1"]),
+                Paragraph(_cv_row_description(t), desc_style),
             ])
         cv_data.append([
-            "Hamming Loss",
+            Paragraph("Hamming Loss", name_style),
             str(cv_results["hamming_loss"]["mean"]),
             str(cv_results["hamming_loss"]["std"]),
+            Paragraph(_cv_row_description("Hamming Loss"), desc_style),
         ])
         cv_data.append([
-            "Solubility Acc",
+            Paragraph("Solubility Acc", name_style),
             str(cv_results["solubility_acc"]["mean"]),
             str(cv_results["solubility_acc"]["std"]),
+            Paragraph(_cv_row_description("Solubility Acc"), desc_style),
         ])
         cv_data.append([
-            "Docking R²",
+            Paragraph("Docking R²", name_style),
             str(cv_results["docking_r2"]["mean"]),
             str(cv_results["docking_r2"]["std"]),
+            Paragraph(_cv_row_description("Docking R²"), desc_style),
         ])
-        cv_tbl = Table(cv_data, colWidths=[180, 130, 130])
+        cv_tbl = Table(cv_data, colWidths=[90, 55, 55, 260])
         cv_tbl.setStyle(TableStyle([
             ("BACKGROUND",  (0,0), (-1,0), rl_colors.HexColor("#12b886")),
             ("TEXTCOLOR",   (0,0), (-1,0), rl_colors.white),
             ("FONTNAME",    (0,0), (-1,0), "Helvetica-Bold"),
             ("GRID",        (0,0), (-1,-1), 0.5, rl_colors.HexColor("#cccccc")),
             ("FONTSIZE",    (0,1), (-1,-1), 10),
+            ("VALIGN",      (0,0), (-1,-1), "TOP"),
             ("TOPPADDING",  (0,0), (-1,-1), 6),
             ("BOTTOMPADDING",(0,0),(-1,-1), 6),
         ]))
@@ -2040,8 +2150,11 @@ def generate_pdf(metrics: dict, prediction: dict, image_paths: list,
 
     if prediction:
         story.append(Paragraph("<b>Prediction Results</b>", styles["Heading2"]))
-        pred_data = [["Property", "Value"]] + [[k, str(v)] for k, v in prediction.items()]
-        pred_tbl  = Table(pred_data, colWidths=[220, 210])
+        pred_data = [["Property", "Value", "What this means"]] + [
+            [Paragraph(k, name_style), str(v), Paragraph(PREDICTION_FIELD_DESCRIPTIONS.get(k, ""), desc_style)]
+            for k, v in prediction.items()
+        ]
+        pred_tbl  = Table(pred_data, colWidths=[110, 110, 240])
         pred_tbl.setStyle(TableStyle([
             ("BACKGROUND",     (0,0), (-1,0),  rl_colors.HexColor("#0b7285")),
             ("TEXTCOLOR",      (0,0), (-1,0),  rl_colors.white),
@@ -2050,6 +2163,7 @@ def generate_pdf(metrics: dict, prediction: dict, image_paths: list,
                                                 rl_colors.white]),
             ("GRID",           (0,0), (-1,-1), 0.5, rl_colors.HexColor("#cccccc")),
             ("FONTSIZE",       (0,1), (-1,-1), 10),
+            ("VALIGN",         (0,0), (-1,-1), "TOP"),
             ("TOPPADDING",     (0,0), (-1,-1), 6),
             ("BOTTOMPADDING",  (0,0), (-1,-1), 6),
         ]))
@@ -2067,6 +2181,10 @@ def generate_pdf(metrics: dict, prediction: dict, image_paths: list,
             story.append(RLImage(img, width=430, height=270))
         except Exception:
             pass
+        img_desc = _image_description(basename)
+        if img_desc:
+            story.append(Spacer(1, 4))
+            story.append(Paragraph(img_desc, desc_style))
         story.append(Spacer(1, 20))
 
     story.append(Paragraph(
@@ -2330,7 +2448,7 @@ elif mode == "Batch Peptide Prediction":
     col_up1, col_up2 = st.columns(2)
     with col_up1:
         batch_csv = st.file_uploader(
-            "📄 Upload CSV (must have a 'peptide' column)", type=["csv"])
+            "📄 Upload CSV (needs a 'peptide' column — any text case is fine, e.g. Peptide/PEPTIDES)", type=["csv"])
     with col_up2:
         batch_fasta = st.file_uploader(
             "📂 Or upload FASTA file",
@@ -2348,10 +2466,21 @@ elif mode == "Batch Peptide Prediction":
     if batch_csv is not None:
         try:
             batch_df = pd.read_csv(batch_csv)
-            if "peptide" not in batch_df.columns:
-                st.error("CSV must have a column named 'peptide'.")
+            # Accept "peptide"/"peptides" as the column header in ANY text case
+            # (e.g. "Peptide", "PEPTIDES", "peptide ", "Peptides") — find the
+            # first column whose stripped, lowercased name matches, then
+            # normalise it to "peptide" for the rest of the pipeline.
+            peptide_col = next(
+                (c for c in batch_df.columns
+                 if str(c).strip().lower() in ("peptide", "peptides")),
+                None,
+            )
+            if peptide_col is None:
+                st.error("CSV must have a column named 'peptide' (any text case, e.g. 'Peptide' or 'PEPTIDES' is fine).")
                 batch_df = None
             else:
+                if peptide_col != "peptide":
+                    batch_df = batch_df.rename(columns={peptide_col: "peptide"})
                 batch_df["peptide"] = batch_df["peptide"].apply(clean_sequence)
                 batch_df   = batch_df[batch_df["peptide"].str.len() >= 1].reset_index(drop=True)
                 batch_seqs = batch_df["peptide"].tolist()
