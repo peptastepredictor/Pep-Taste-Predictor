@@ -1251,7 +1251,7 @@ def render_shap_analysis(taste_multilabel_model, X_train_bg, X_query_df,
                 cap     = caption_shap(sv, feature_names, seq, taste_name)
                 save_fig(fig_bar, fname, caption=cap)
                 st.markdown(f"#### {TASTE_EMOJI.get(taste_name,'')} {taste_name}")
-                st.image(fname, use_column_width=True)
+                st.image(fname, use_container_width=True)
                 show_caption(cap)
             except Exception as e:
                 st.warning(f"SHAP for {taste_name} could not complete: {e}")
@@ -1782,7 +1782,7 @@ def render_structural_analysis(pdb_text: str, prefix: str = "", seq: str = ""):
                     f"flexible."
                 )
                 save_fig(fig_ss, f"{prefix}ss_composition.png", caption=cap_ss)
-                st.image(f"{prefix}ss_composition.png", use_column_width=True)
+                st.image(f"{prefix}ss_composition.png", use_container_width=True)
                 show_caption(cap_ss)
 
     st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
@@ -1793,7 +1793,7 @@ def render_structural_analysis(pdb_text: str, prefix: str = "", seq: str = ""):
     fig_rama = plot_ramachandran(phi_psi)
     cap_rama = caption_ramachandran(phi_psi, seq=seq)
     save_fig(fig_rama, f"{prefix}ramachandran.png", caption=cap_rama)
-    st.image(f"{prefix}ramachandran.png", use_column_width=True)
+    st.image(f"{prefix}ramachandran.png", use_container_width=True)
     show_caption(cap_rama)
 
     st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
@@ -1802,7 +1802,7 @@ def render_structural_analysis(pdb_text: str, prefix: str = "", seq: str = ""):
     fig_dist = plot_distance_map(dist_map, seq=seq)
     cap_dist = caption_distance_map(dist_map, seq=seq)
     save_fig(fig_dist, f"{prefix}ca_distance_map.png", caption=cap_dist)
-    st.image(f"{prefix}ca_distance_map.png", use_column_width=True)
+    st.image(f"{prefix}ca_distance_map.png", use_container_width=True)
     show_caption(cap_dist)
 
     plddt_vals = _extract_plddt(pdb_text)
@@ -1852,7 +1852,7 @@ def render_structural_analysis(pdb_text: str, prefix: str = "", seq: str = ""):
             f"<strong>What it means:</strong> {confidence_note}"
         )
         save_fig(fig_pl, save_fig_pl_name, caption=cap_pl)
-        st.image(save_fig_pl_name, use_column_width=True)
+        st.image(save_fig_pl_name, use_container_width=True)
         show_caption(cap_pl)
 
     _close_all_figs()
@@ -2863,7 +2863,7 @@ if st.session_state.show_analytics:
         fig_metrics, df_metrics = plot_multilabel_per_taste(Yt_test, Yt_pred_test)
         cap_metrics = caption_multilabel_metrics(df_metrics)
         save_fig(fig_metrics, "per_taste_metrics.png", caption=cap_metrics)
-        st.image("per_taste_metrics.png", use_column_width=True)
+        st.image("per_taste_metrics.png", use_container_width=True)
         show_caption(cap_metrics)
 
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
@@ -2871,7 +2871,7 @@ if st.session_state.show_analytics:
         fig_cms = plot_confusion_per_taste(Yt_test, Yt_pred_test)
         cap_cms = caption_confusion_per_taste(Yt_test, Yt_pred_test)
         save_fig(fig_cms, "confusion_per_taste.png", caption=cap_cms)
-        st.image("confusion_per_taste.png", use_column_width=True)
+        st.image("confusion_per_taste.png", use_container_width=True)
         show_caption(cap_cms)
 
         # Summary metric boxes
@@ -2899,7 +2899,7 @@ if st.session_state.show_analytics:
         fig_dist = plot_distributions(df_all)
         cap_dist_all = caption_distributions(df_all)
         save_fig(fig_dist, "distributions.png", caption=cap_dist_all)
-        st.image("distributions.png", use_column_width=True)
+        st.image("distributions.png", use_container_width=True)
         show_caption(cap_dist_all)
 
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
@@ -2911,7 +2911,7 @@ if st.session_state.show_analytics:
         )
         cap_pca_txt = caption_pca(pca_model)
         save_fig(fig_pca, "pca_overall.png", caption=cap_pca_txt)
-        st.image("pca_overall.png", use_column_width=True)
+        st.image("pca_overall.png", use_container_width=True)
         show_caption(cap_pca_txt)
 
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
@@ -2919,7 +2919,7 @@ if st.session_state.show_analytics:
         fig_imp, imp_df = plot_feature_importance(taste_model.estimators_, FEATURE_NAMES, top_n=20)
         cap_imp = caption_feature_importance(imp_df)
         save_fig(fig_imp, "feature_importance_taste.png", caption=cap_imp)
-        st.image("feature_importance_taste.png", use_column_width=True)
+        st.image("feature_importance_taste.png", use_container_width=True)
         show_caption(cap_imp)
 
         _close_all_figs()
