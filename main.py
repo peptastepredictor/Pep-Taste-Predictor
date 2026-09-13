@@ -3,7 +3,7 @@
 # Hybrid Structural Engine v2 | Light + Dark Mode
 # MULTI-LABEL taste model: each peptide can have multiple tastes
 # Taste labels: Bitter, Salty, Sour, Sweet, Umami (binary per taste)
-# Solubility classifier | Docking R² regressor
+# Solubility classifier
 # SHAP interpretability integrated
 # ==========================================================
 
@@ -282,7 +282,6 @@ st.sidebar.write("AI-driven peptide analysis platform")
 st.sidebar.markdown("""
 - 🎯 Multi-label taste prediction (all 5 tastes)
 - 💧 Solubility prediction
-- 🔗 Docking score estimation
 - 🔬 Structural bioinformatics
 - 🧠 SHAP interpretability
 - ⚙️ Hybrid Structural Engine v2
@@ -1404,32 +1403,6 @@ def caption_confusion_per_taste(Y_true, Y_pred):
     )
 
 
-def plot_docking(y_true, y_pred):
-    C    = get_plot_colors()
-    r2   = r2_score(y_true, y_pred)
-    rmse = np.sqrt(mean_squared_error(y_true, y_pred))
-    lims = [min(y_true.min(), y_pred.min()) - 5,
-            max(y_true.max(), y_pred.max()) + 5]
-    fig, ax = plt.subplots(figsize=(6, 6))
-    apply_plot_style(fig, [ax])
-    ax.scatter(y_true, y_pred, alpha=0.65, edgecolors="none",
-               color=C["accent1"], s=45)
-    ax.plot(lims, lims, color=C["red"], linestyle="--", lw=1.8, label="Perfect fit")
-    ax.set_xlim(lims); ax.set_ylim(lims)
-    ax.annotate(
-        f"R² = {r2:.3f}\nRMSE = {rmse:.2f}",
-        xy=(0.05, 0.87), xycoords="axes fraction", fontsize=11, color=C["text"],
-        bbox=dict(boxstyle="round,pad=0.5", fc=C["fig_bg"], ec=C["grid"], alpha=0.95))
-    ax.set_xlabel("True Docking Score", fontsize=12, labelpad=10)
-    ax.set_ylabel("Predicted Docking Score", fontsize=12, labelpad=10)
-    ax.set_title("Docking Score: True vs Predicted", fontsize=13, fontweight="bold", pad=12)
-    leg = ax.legend(fontsize=10, facecolor=C["fig_bg"], edgecolor=C["grid"])
-    for t in leg.get_texts():
-        t.set_color(C["text"])
-    plt.tight_layout()
-    return fig
-
-
 def plot_feature_importance(estimators, feature_names, top_n=20):
     """Average feature importance across all taste estimators."""
     C   = get_plot_colors()
@@ -1705,27 +1678,6 @@ def caption_multilabel_metrics(df_metrics):
     )
 
 
-def caption_docking(y_true, y_pred):
-    r2   = r2_score(y_true, y_pred)
-    rmse = np.sqrt(mean_squared_error(y_true, y_pred))
-    qual = "strong" if r2 >= 0.75 else ("moderate" if r2 >= 0.5 else "weak")
-    return (
-        "<strong>What this shows:</strong> each dot is one test-set peptide, positioned by "
-        "its real, experimentally-derived docking score (x-axis) against what the model "
-        "predicted (y-axis). The red dashed diagonal is what perfect agreement would look "
-        "like — the closer the dots hug that line, the better the model's predictions "
-        "line up with reality.<br><br>"
-        f"<strong>R² = {r2:.3f}</strong> — a {qual} fit, meaning the model explains "
-        f"{r2*100:.1f}% of why docking scores vary from one peptide to the next.<br>"
-        f"<strong>RMSE = {rmse:.2f}</strong> — on average, predictions are off by about this "
-        f"many docking-score units.<br>"
-        f"<em>Docking scores are dimensionless binding-energy estimates (typical range "
-        f"−261 to −43); more negative generally means stronger predicted binding.</em><br><br>"
-        f"<strong>What it means:</strong> a {qual} fit means the docking-score predictions are "
-        f"{'reliable enough to help prioritise which peptides to test first' if qual != 'weak' else 'a rough starting point only — treat individual predictions with caution'}."
-    )
-
-
 def caption_ramachandran(phi_psi, seq=""):
     if not phi_psi:
         return (
@@ -1923,7 +1875,6 @@ def train_models():
     df = df[
         df["taste"].notna()
         & df["solubility"].notna()
-        & df["docking score (kcal/mol)"].notna()
     ].reset_index(drop=True)
 
     df["solubility"] = df["solubility"].str.strip().str.rstrip(".")
@@ -1952,7 +1903,6 @@ def train_models():
 
     le_sol  = LabelEncoder()
     y_sol   = le_sol.fit_transform(df["solubility"])
-    y_dock  = df["docking score (kcal/mol)"].values
 
     idx = np.arange(len(X))
     tr_idx, te_idx = train_test_split(idx, test_size=0.2, random_state=42)
@@ -1960,7 +1910,6 @@ def train_models():
     Xtr, Xte         = X.iloc[tr_idx], X.iloc[te_idx]
     Ytr_t, Yte_t     = Y_taste[tr_idx], Y_taste[te_idx]
     ys_tr, ys_te     = y_sol[tr_idx],   y_sol[te_idx]
-    yd_tr, yd_te     = y_dock[tr_idx],  y_dock[te_idx]
 
     # ── TASTE MODEL: MultiOutputClassifier wrapping ExtraTrees ────────────────
     # One binary ExtraTreesClassifier per taste.  class_weight="balanced"
@@ -1973,13 +1922,10 @@ def train_models():
 
     sol_model  = ExtraTreesClassifier(
         n_estimators=300, class_weight="balanced", random_state=42)
-    dock_model = RandomForestRegressor(n_estimators=400, random_state=42)
     sol_model.fit(Xtr,  ys_tr)
-    dock_model.fit(Xtr, yd_tr)
 
     Ypred_t     = taste_model.predict(Xte)
     sol_preds   = sol_model.predict(Xte)
-    dock_preds  = dock_model.predict(Xte)
 
     # Per-taste metrics
     per_taste_acc = {
@@ -1996,8 +1942,6 @@ def train_models():
         "Hamming Loss (taste)":  round(hamming_loss(Yte_t, Ypred_t), 4),
         "Solubility accuracy":   accuracy_score(ys_te, sol_preds),
         "Solubility F1":         f1_score(ys_te, sol_preds, average="weighted"),
-        "Docking R²":            r2_score(yd_te, dock_preds),
-        "Docking RMSE":          np.sqrt(mean_squared_error(yd_te, dock_preds)),
     }
 
     bg_size = min(100, len(Xtr))
@@ -2005,10 +1949,10 @@ def train_models():
     bg_idx  = rng.choice(len(Xtr), bg_size, replace=False)
     X_bg    = Xtr.iloc[bg_idx]
 
-    return (df, X, Xtr, Xte, Ytr_t, Yte_t, ys_te, yd_te,
-            taste_model, sol_model, dock_model,
+    return (df, X, Xtr, Xte, Ytr_t, Yte_t, ys_te,
+            taste_model, sol_model,
             le_sol, metrics, X_bg, label_counts,
-            Ypred_t, sol_preds, dock_preds)
+            Ypred_t, sol_preds)
 
 
 # ==========================================================
@@ -2016,12 +1960,11 @@ def train_models():
 # ==========================================================
 
 @st.cache_resource(show_spinner="Running 5-fold cross-validation…")
-def run_cross_validation(df_cv, X_cv, Y_cv, y_sol_cv, y_dock_cv):
+def run_cross_validation(df_cv, X_cv, Y_cv, y_sol_cv):
     skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
     fold_f1   = {t: [] for t in TASTES}
     fold_hl   = []
     fold_sol  = []
-    fold_r2   = []
 
     # Stratify on Bitter (most balanced class)
     for tr, te in skf.split(X_cv, Y_cv[:, 0]):
@@ -2045,10 +1988,6 @@ def run_cross_validation(df_cv, X_cv, Y_cv, y_sol_cv, y_dock_cv):
         sm_f.fit(Xtr_f, y_sol_cv[tr])
         fold_sol.append(accuracy_score(y_sol_cv[te], sm_f.predict(Xte_f)))
 
-        dm_f = RandomForestRegressor(n_estimators=400, random_state=42)
-        dm_f.fit(Xtr_f, y_dock_cv[tr])
-        fold_r2.append(r2_score(y_dock_cv[te], dm_f.predict(Xte_f)))
-
     cv_results = {}
     for t in TASTES:
         v = fold_f1[t]
@@ -2064,10 +2003,6 @@ def run_cross_validation(df_cv, X_cv, Y_cv, y_sol_cv, y_dock_cv):
         "mean": round(float(np.mean(fold_sol)), 3),
         "std":  round(float(np.std(fold_sol)),  3),
     }
-    cv_results["docking_r2"] = {
-        "mean": round(float(np.mean(fold_r2)), 3),
-        "std":  round(float(np.std(fold_r2)),  3),
-    }
     return cv_results
 
 
@@ -2077,10 +2012,10 @@ def run_cross_validation(df_cv, X_cv, Y_cv, y_sol_cv, y_dock_cv):
 
 (
     df_all, X_all, X_train, X_test,
-    Yt_train, Yt_test, ys_test, yd_test,
-    taste_model, sol_model, dock_model,
+    Yt_train, Yt_test, ys_test,
+    taste_model, sol_model,
     le_sol, metrics, X_bg, label_counts,
-    Yt_pred_test, sol_pred_test, dock_pred_test,
+    Yt_pred_test, sol_pred_test,
 ) = train_models()
 FEATURE_NAMES = list(X_all.columns)
 
@@ -2089,7 +2024,6 @@ cv_results = run_cross_validation(
     df_all, X_all,
     df_all[[f"label_{t}" for t in TASTES]].values.astype(int),
     le_sol.transform(df_all["solubility"]),
-    df_all["docking score (kcal/mol)"].values,
 )
 
 
@@ -2130,10 +2064,6 @@ METRIC_DESCRIPTIONS = {
     "Solubility accuracy":  "Fraction of test-set peptides whose solubility class was predicted correctly.",
     "Solubility F1":        "Weighted F1-score (balances precision and recall) for solubility classification "
                              "across all solubility classes.",
-    "Docking R²":           "Proportion of variance in true docking scores explained by the model's predictions "
-                             "on the test set. Closer to 1.0 is better.",
-    "Docking RMSE":         "Root-mean-squared error between predicted and true docking scores (same units as "
-                             "the docking score). Lower is better.",
 }
 
 
@@ -2149,7 +2079,6 @@ CV_ROW_DESCRIPTIONS = {
     "Hamming Loss": "5-fold average of the taste Hamming Loss described above, with the fold-to-fold "
                      "standard deviation — shows how stable the taste model is across different data splits.",
     "Solubility Acc": "5-fold average solubility classification accuracy, with fold-to-fold standard deviation.",
-    "Docking R²":     "5-fold average docking-score R², with fold-to-fold standard deviation.",
 }
 
 
@@ -2167,8 +2096,6 @@ PREDICTION_FIELD_DESCRIPTIONS = {
                              "more than one taste at once.",
     "Taste Probabilities":  "Model-estimated probability (%) that the peptide exhibits each of the 5 tastes.",
     "Predicted Solubility": "Predicted solubility class (e.g. Good/Poor) for the peptide.",
-    "Docking Score":        "Predicted molecular docking score (kcal/mol-scale energy units); more negative "
-                             "generally indicates stronger predicted binding.",
     "Structure Engine":     "Which engine in the Hybrid Structural Engine (RCSB PDB, Remote ESMFold, "
                              "Chou-Fasman Folding Engine, or PeptideBuilder) produced the 3D structure.",
     "Predicted Fold":       "Overall fold classification (e.g. All-α Helix, All-β Sheet) derived from the "
@@ -2214,9 +2141,6 @@ IMAGE_DESCRIPTIONS = [
     ("feature_importance",     "Ranks which of the 432 model features (physicochemical properties, amino-acid "
                                 "makeup, or pairs of neighbouring residues) matter most, on average, for the "
                                 "model's taste decisions."),
-    ("docking_scatter",        "Plots true vs. predicted docking scores for test-set peptides; points closer to "
-                                "the diagonal line mean the model's binding-strength predictions are more "
-                                "accurate."),
 ]
 
 
@@ -2253,7 +2177,7 @@ def generate_pdf(metrics: dict, prediction: dict, image_paths: list,
     story.append(Paragraph("<b>PepTastePredictor — Analysis Report</b>", styles["Title"]))
     story.append(Spacer(1, 8))
     story.append(Paragraph(
-        "AI-driven peptide taste (multi-label), solubility, docking and structural analysis. "
+        "AI-driven peptide taste (multi-label), solubility, and structural analysis. "
         "Hybrid Structural Engine v2: RCSB PDB → Remote ESMFold → "
         "Peptide Folding Engine → PeptideBuilder. "
         "SHAP interpretability integrated.",
@@ -2311,12 +2235,6 @@ def generate_pdf(metrics: dict, prediction: dict, image_paths: list,
             str(cv_results["solubility_acc"]["mean"]),
             str(cv_results["solubility_acc"]["std"]),
             Paragraph(_cv_row_description("Solubility Acc"), desc_style),
-        ])
-        cv_data.append([
-            Paragraph("Docking R²", name_style),
-            str(cv_results["docking_r2"]["mean"]),
-            str(cv_results["docking_r2"]["std"]),
-            Paragraph(_cv_row_description("Docking R²"), desc_style),
         ])
         cv_tbl = Table(cv_data, colWidths=[90, 55, 55, 260])
         cv_tbl.setStyle(TableStyle([
@@ -2409,7 +2327,7 @@ st.markdown("""
 <h1>🧬 PepTastePredictor</h1>
 <p>
 Integrated machine learning and structural bioinformatics for peptide taste,
-solubility, docking score estimation, and 3D structure analysis.<br>
+solubility, and 3D structure analysis.<br>
 <strong>Multi-label taste model:</strong> Bitter · Salty · Sour · Sweet · Umami
 — each predicted independently, peptides can carry multiple tastes &nbsp;|&nbsp;
 <strong>SHAP interpretability</strong> &nbsp;|&nbsp;
@@ -2512,13 +2430,9 @@ if mode == "Single Peptide Prediction":
             predicted_tastes, taste_probas = predict_tastes(Xp)
 
             sol       = le_sol.inverse_transform(sol_model.predict(Xp))[0]
-            dock      = dock_model.predict(Xp)[0]
             sol_proba = sol_model.predict_proba(Xp)[0]
 
             sol_color  = "#12b886" if "good" in sol.lower() else "#e67e22"
-            dock_color = "#12b886" if dock < -180 else ("#f39c12" if dock < -120 else "#c0392b")
-            dock_label = ("Strong binder" if dock < -180 else
-                          "Moderate binder" if dock < -120 else "Weak binder")
 
             taste_display = taste_badges_html(predicted_tastes)
 
@@ -2536,11 +2450,6 @@ if mode == "Single Peptide Prediction":
                   <div class="metric-box-label">Solubility</div>
                   <div class="metric-box-value" style="color:{sol_color}!important;">{sol}</div>
                   <div class="metric-box-sub">Confidence: {max(sol_proba)*100:.1f}%</div>
-                </div>
-                <div class="metric-box">
-                  <div class="metric-box-label">Docking Score</div>
-                  <div class="metric-box-value" style="color:{dock_color}!important;">{dock:.2f}</div>
-                  <div class="metric-box-sub">{dock_label}</div>
                 </div>
                 <div class="metric-box">
                   <div class="metric-box-label">Sequence Length</div>
@@ -2633,7 +2542,6 @@ if mode == "Single Peptide Prediction":
                 "Taste Probabilities":   " | ".join(
                     f"{t}:{taste_probas[t]:.1f}%" for t in TASTES),
                 "Predicted Solubility":  sol,
-                "Docking Score":         round(dock, 2),
                 "Structure Engine":      engine_label,
                 "Predicted Fold":        classify_fold(ss_result, seq),
                 "α-Helix Fraction":      f"{ss_result['helix_frac']*100:.1f}%",
@@ -2710,7 +2618,7 @@ elif mode == "Batch Peptide Prediction":
 
         all_predicted_tastes = []
         all_taste_probas     = []
-        sols, docks, engines, fold_types = [], [], [], []
+        sols, engines, fold_types = [], [], []
         pdb_files = {}
 
         for i, seq_b in enumerate(batch_seqs):
@@ -2718,14 +2626,12 @@ elif mode == "Batch Peptide Prediction":
                 Xr = pd.DataFrame([model_features(seq_b)])
                 pt, tp = predict_tastes(Xr)
                 s      = le_sol.inverse_transform(sol_model.predict(Xr))[0]
-                d      = round(dock_model.predict(Xr)[0], 2)
             except Exception:
-                pt, tp, s, d = [], {t: 0.0 for t in TASTES}, "Error", None
+                pt, tp, s = [], {t: 0.0 for t in TASTES}, "Error"
             all_predicted_tastes.append(", ".join(pt) if pt else "None")
             all_taste_probas.append(
                 " | ".join(f"{t}:{tp[t]:.1f}%" for t in TASTES))
             sols.append(s)
-            docks.append(d)
 
             try:
                 ss_b = predict_secondary_structure(seq_b)
@@ -2756,7 +2662,6 @@ elif mode == "Batch Peptide Prediction":
         batch_df["Predicted Tastes"]        = all_predicted_tastes
         batch_df["Taste Probabilities"]     = all_taste_probas
         batch_df["Predicted Solubility"]    = sols
-        batch_df["Predicted Docking Score"] = docks
         batch_df["Predicted Fold Type"]     = fold_types
         batch_df["Structure Engine"]        = engines
 
@@ -2905,7 +2810,6 @@ if st.session_state.show_analytics:
 
         hl  = cv_results["hamming_loss"]
         sol = cv_results["solubility_acc"]
-        r2  = cv_results["docking_r2"]
 
         st.markdown(f"""
         <div class="metric-grid" style="margin:16px 0;">
@@ -2917,10 +2821,6 @@ if st.session_state.show_analytics:
           <div class="metric-box">
             <div class="metric-box-label">CV Solubility Acc</div>
             <div class="metric-box-value">{sol['mean']:.3f} ± {sol['std']:.3f}</div>
-          </div>
-          <div class="metric-box">
-            <div class="metric-box-label">CV Docking R²</div>
-            <div class="metric-box-value">{r2['mean']:.3f} ± {r2['std']:.3f}</div>
           </div>
         </div>""", unsafe_allow_html=True)
 
@@ -2992,10 +2892,6 @@ if st.session_state.show_analytics:
             <div class="metric-box-label">Solubility Accuracy</div>
             <div class="metric-box-value">{metrics['Solubility accuracy']*100:.1f}%</div>
           </div>
-          <div class="metric-box">
-            <div class="metric-box-label">Docking R²</div>
-            <div class="metric-box-value">{metrics['Docking R²']:.3f}</div>
-          </div>
         </div>""", unsafe_allow_html=True)
 
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
@@ -3025,14 +2921,6 @@ if st.session_state.show_analytics:
         save_fig(fig_imp, "feature_importance_taste.png", caption=cap_imp)
         st.image("feature_importance_taste.png", use_column_width=True)
         show_caption(cap_imp)
-
-        st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
-        st.markdown("### 🔹 Docking Score: True vs Predicted")
-        fig_dock = plot_docking(yd_test, dock_pred_test)
-        cap_dock = caption_docking(yd_test, dock_pred_test)
-        save_fig(fig_dock, "docking_scatter.png", caption=cap_dock)
-        st.image("docking_scatter.png", use_column_width=True)
-        show_caption(cap_dock)
 
         _close_all_figs()
 
