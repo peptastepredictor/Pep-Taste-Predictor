@@ -1092,40 +1092,87 @@ def ramachandran(pdb_text: str) -> list:
         _unlink(tmp)
 
 
+def _manual_ca_coords(pdb_text: str) -> np.ndarray:
+    """Permissive fixed-column CA coordinate extraction — mirrors the same
+    column parsing _validate_pdb/_extract_plddt already use, so any PDB that
+    passes upload validation also yields coordinates here, regardless of
+    quirks that trip up Biopython's stricter PDBParser."""
+    seen, coords = set(), []
+    for line in pdb_text.splitlines():
+        if not line.startswith("ATOM"):
+            continue
+        if line[12:16].strip() != "CA":
+            continue
+        key = (line[21], line[22:26].strip())
+        if key in seen:
+            continue
+        try:
+            x = float(line[30:38])
+            y = float(line[38:46])
+            z = float(line[46:54])
+        except ValueError:
+            continue
+        seen.add(key)
+        coords.append((x, y, z))
+    return np.array(coords)
+
+
 def ca_distance_map(pdb_text: str) -> np.ndarray:
     if not pdb_text:
         return np.zeros((1, 1))
     tmp = _write_temp_pdb(pdb_text)
+    coords = None
     try:
         structure = PDBParser(QUIET=True).get_structure("x", tmp)
         cas = [r["CA"].get_vector().get_array()
                for r in structure.get_residues() if "CA" in r]
-        if not cas:
-            return np.zeros((1, 1))
-        coords = np.array(cas)
-        diff   = coords[:, None, :] - coords[None, :, :]
-        return np.sqrt((diff ** 2).sum(-1))
+        if cas:
+            coords = np.array(cas)
     except Exception:
-        return np.zeros((1, 1))
+        coords = None
     finally:
         _unlink(tmp)
+
+    if coords is None or len(coords) < 2:
+        # Biopython's parser is stricter than the app's own PDB validator —
+        # fall back to the same permissive manual parsing used elsewhere.
+        manual_coords = _manual_ca_coords(pdb_text)
+        if len(manual_coords) >= 2:
+            coords = manual_coords
+
+    if coords is None or len(coords) < 2:
+        return np.zeros((1, 1))
+
+    diff = coords[:, None, :] - coords[None, :, :]
+    return np.sqrt((diff ** 2).sum(-1))
 
 
 def ca_rmsd(pdb_text: str):
     if not pdb_text:
         return None
     tmp = _write_temp_pdb(pdb_text)
+    coords = None
     try:
         structure = PDBParser(QUIET=True).get_structure("x", tmp)
-        cas = [r["CA"].get_vector() for r in structure.get_residues() if "CA" in r]
-        if len(cas) < 2:
-            return None
-        ref = cas[0]
-        return float(np.sqrt(np.mean([(v - ref).norm() ** 2 for v in cas])))
+        cas = [r["CA"].get_vector().get_array()
+               for r in structure.get_residues() if "CA" in r]
+        if cas:
+            coords = np.array(cas)
     except Exception:
-        return None
+        coords = None
     finally:
         _unlink(tmp)
+
+    if coords is None or len(coords) < 2:
+        manual_coords = _manual_ca_coords(pdb_text)
+        if len(manual_coords) >= 2:
+            coords = manual_coords
+
+    if coords is None or len(coords) < 2:
+        return None
+
+    ref = coords[0]
+    return float(np.sqrt(np.mean(np.sum((coords - ref) ** 2, axis=1))))
 
 
 # ==========================================================
