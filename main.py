@@ -50,6 +50,8 @@ from sklearn.metrics import (
     r2_score, confusion_matrix, classification_report,
     hamming_loss,
 )
+# ADDED: ROC Curve Evaluation for Taste Classification (imports)
+from sklearn.metrics import roc_curve, roc_auc_score
 from sklearn.decomposition import PCA
 
 from reportlab.platypus import (
@@ -1447,6 +1449,206 @@ def caption_confusion_per_taste(Y_true, Y_pred):
         "while a false alarm just costs some extra lab time to rule out. Whichever taste has "
         "the largest off-diagonal numbers above is the one most worth collecting more training "
         "examples for."
+    )
+
+
+# ==========================================================
+# ADDED: ROC Curve Evaluation for Taste Classification
+# ==========================================================
+
+ROC_TASTE_COLORS = {
+    "Bitter": "#c0392b", "Salty": "#2980b9", "Sour": "#f39c12",
+    "Sweet":  "#8e44ad", "Umami": "#27ae60",
+}
+
+
+def compute_taste_roc(model, X_eval, Y_true):
+    """
+    Compute ROC curve (FPR, TPR) and ROC-AUC for each of the 5 taste labels
+    using the existing MultiOutputClassifier and its held-out test data.
+
+    - Probabilities come from model.predict_proba(), which returns a list with
+      one (n_samples, n_classes) array per taste.
+    - The column belonging to label 1 is located through each estimator's
+      classes_ attribute, so the correct positive-class probability is used.
+    - A taste is skipped (valid=False, with a stated reason) if the test labels
+      contain only one class, or if the classifier never saw class 1 in training.
+    """
+    probas_list = model.predict_proba(X_eval)
+    results = {}
+    for i, t in enumerate(TASTES):
+        y_true = np.asarray(Y_true[:, i]).astype(int)
+        n_pos  = int((y_true == 1).sum())
+        n_neg  = int((y_true == 0).sum())
+        entry  = {"valid": False, "n_pos": n_pos, "n_neg": n_neg, "reason": ""}
+
+        if n_pos == 0 or n_neg == 0:
+            only = "negative (no positive)" if n_pos == 0 else "positive (no negative)"
+            entry["reason"] = (
+                f"the held-out test set contains only {only} samples for {t} "
+                f"(positives={n_pos}, negatives={n_neg}), so FPR/TPR and AUC are undefined.")
+            results[t] = entry
+            continue
+
+        classes = list(model.estimators_[i].classes_)
+        if 1 not in classes:
+            entry["reason"] = (
+                f"the {t} classifier has no probability column for label 1 "
+                f"(classes seen in training: {classes}).")
+            results[t] = entry
+            continue
+
+        try:
+            y_score = np.asarray(probas_list[i])[:, classes.index(1)]
+            fpr, tpr, _ = roc_curve(y_true, y_score)
+            auc_val     = roc_auc_score(y_true, y_score)
+        except Exception as e:
+            entry["reason"] = f"ROC calculation raised an error: {e}"
+            results[t] = entry
+            continue
+
+        entry.update({"valid": True, "fpr": fpr, "tpr": tpr, "auc": float(auc_val)})
+        results[t] = entry
+    return results
+
+
+def plot_taste_roc(roc_results):
+    """ROC curves for all valid tastes on one axis. Returns None if none are valid."""
+    valid = {t: r for t, r in roc_results.items() if r["valid"]}
+    if not valid:
+        return None
+    C = get_plot_colors()
+    fig, ax = plt.subplots(figsize=(8, 7))
+    apply_plot_style(fig, [ax])
+    for t in TASTES:
+        if t in valid:
+            r = valid[t]
+            ax.plot(r["fpr"], r["tpr"], lw=2.2, color=ROC_TASTE_COLORS[t],
+                    label=f"{t} (AUC = {r['auc']:.3f})")
+    ax.plot([0, 1], [0, 1], linestyle="--", lw=1.5, color=C["grid"],
+            label="Random classifier (AUC = 0.500)")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("False Positive Rate (FPR)", fontsize=12, labelpad=10)
+    ax.set_ylabel("True Positive Rate (TPR)", fontsize=12, labelpad=10)
+    ax.set_title("ROC Curves for Taste Classification", fontsize=13,
+                 fontweight="bold", pad=12)
+    ax.grid(True, color=C["grid"], alpha=0.6, linewidth=0.8)
+    leg = ax.legend(fontsize=9, loc="lower right",
+                    facecolor=C["fig_bg"], edgecolor=C["grid"])
+    for tx in leg.get_texts():
+        tx.set_color(C["text"])
+    plt.tight_layout()
+    return fig
+
+
+def _auc_interpretation(auc_val):
+    """Plain-language reading of an AUC value (ranges are stated in the caption)."""
+    if auc_val >= 0.90:
+        return "excellent discrimination"
+    if auc_val >= 0.80:
+        return "strong discrimination"
+    if auc_val >= 0.70:
+        return "moderate discrimination"
+    if auc_val >= 0.60:
+        return "limited discrimination"
+    if auc_val >= 0.50:
+        return "very limited discrimination, only slightly better than random ranking"
+    return "worse than random ranking, which warrants investigation"
+
+
+# ==========================================================
+# ADDED: ROC Curve Description and Interpretation
+# ==========================================================
+
+def caption_taste_roc(roc_results):
+    """Dynamic explanation + inference text built from the real ROC results."""
+    valid = {t: r for t, r in roc_results.items() if r["valid"]}
+
+    taste_lines = ""
+    for t in TASTES:
+        r = roc_results[t]
+        if r["valid"]:
+            note = ""
+            if r["n_pos"] < 20 or r["n_neg"] < 20:
+                note = (" Note: very few test samples in one class, so this AUC "
+                        "estimate may be unstable.")
+            taste_lines += (
+                f"<strong>{t}:</strong> AUC = {r['auc']:.3f} "
+                f"({r['n_pos']} positive and {r['n_neg']} negative test peptides) — "
+                f"{_auc_interpretation(r['auc'])}.{note}<br>"
+            )
+        else:
+            taste_lines += (
+                f"<strong>{t}:</strong> ROC curve unavailable — {r['reason']}<br>"
+            )
+
+    if len(valid) >= 2:
+        best_t  = max(valid, key=lambda k: valid[k]["auc"])
+        worst_t = min(valid, key=lambda k: valid[k]["auc"])
+        mean_auc = float(np.mean([r["auc"] for r in valid.values()]))
+        summary = (
+            f"<strong>Overall:</strong> across the {len(valid)} tastes with a valid curve, "
+            f"the mean AUC is {mean_auc:.3f}. The highest AUC observed is for "
+            f"<strong>{best_t}</strong> ({valid[best_t]['auc']:.3f}) and the lowest is for "
+            f"<strong>{worst_t}</strong> ({valid[worst_t]['auc']:.3f}).<br>"
+        )
+    elif len(valid) == 1:
+        only_t = next(iter(valid))
+        summary = (
+            f"<strong>Overall:</strong> only {only_t} has a valid ROC curve on this test set, "
+            f"so no comparison between tastes is possible.<br>"
+        )
+    else:
+        summary = ""
+
+    return (
+        "<strong>A. What does this graph show?</strong><br>"
+        "The ROC (Receiver Operating Characteristic) curve evaluates how well the taste "
+        "classification model separates peptides that <em>have</em> a particular taste from "
+        "peptides that <em>do not</em>. Because the model is multi-label, each taste is its own "
+        "binary classifier, and each coloured curve represents one of the five tastes "
+        "(Bitter, Salty, Sour, Sweet, Umami), calculated from the model's predicted "
+        "probabilities on the held-out test peptides.<br><br>"
+
+        "<strong>B. X-axis — False Positive Rate (FPR)</strong><br>"
+        "FPR is the proportion of peptides that do <em>not</em> have a given taste but were "
+        "wrongly flagged as having it, as the probability cut-off is varied. A lower FPR is "
+        "generally preferable.<br><br>"
+
+        "<strong>C. Y-axis — True Positive Rate (TPR)</strong><br>"
+        "TPR is the proportion of peptides that <em>do</em> have the taste and are correctly "
+        "identified. It is also called sensitivity or recall. A higher TPR is generally "
+        "preferable.<br><br>"
+
+        "<strong>D. Meaning of the ROC curves</strong><br>"
+        "A curve that bends towards the top-left corner (high TPR at low FPR) indicates better "
+        "discrimination between positive and negative peptides. The dashed diagonal line is the "
+        "expected performance of a random-ranking classifier; the further a curve rises above "
+        "it, the better the ranking.<br><br>"
+
+        "<strong>E. Understanding AUC</strong><br>"
+        "AUC (Area Under the Curve) summarises how well the model ranks positive peptides above "
+        "negative ones: it is the probability that a randomly chosen positive peptide receives a "
+        "higher score than a randomly chosen negative one. An AUC close to 1.0 means excellent "
+        "discrimination, around 0.5 means close to random ranking, and below 0.5 means the "
+        "ranking may be worse than random, which can warrant investigation. "
+        "<strong>AUC is not the same as accuracy</strong> — accuracy depends on one fixed "
+        "probability threshold, whereas AUC looks at all thresholds. "
+        "Interpretive ranges used below: 0.90 and above = excellent; 0.80 to 0.90 = strong; "
+        "0.70 to 0.80 = moderate; 0.60 to 0.70 = limited; 0.50 to 0.60 = very limited; "
+        "below 0.50 = worse than random.<br><br>"
+
+        "<strong>F. Actual taste-wise interpretation (from this model's test set)</strong><br>"
+        f"{taste_lines}{summary}<br>"
+
+        "<strong>G. Important limitations</strong><br>"
+        "ROC-AUC measures discrimination (ranking), not probability calibration — a taste can "
+        "have a high AUC while its predicted probabilities are still poorly calibrated. "
+        "AUC also does not by itself show that predictions are accurate at the default "
+        "classification threshold. A small or unrepresentative test set can make AUC estimates "
+        "unstable. Finally, if the test set contains only one class for a taste, its ROC curve "
+        "and AUC cannot be calculated reliably from that test set."
     )
 
 
@@ -2920,6 +3122,37 @@ if st.session_state.show_analytics:
         save_fig(fig_cms, "confusion_per_taste.png", caption=cap_cms)
         st.image("confusion_per_taste.png", use_container_width=True)
         show_caption(cap_cms)
+
+        # ADDED: ROC Curve Evaluation for Taste Classification
+        # Uses the existing multi-label taste_model and its existing held-out
+        # test set (X_test, Yt_test) — no retraining and no new split.
+        st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
+        st.markdown("### 📉 ROC Curves for Taste Classification")
+        try:
+            roc_results = compute_taste_roc(taste_model, X_test, Yt_test)
+        except Exception as e:
+            roc_results = None
+            st.error(f"ROC evaluation could not be completed: {e}")
+
+        if roc_results is not None:
+            for t in TASTES:
+                if not roc_results[t]["valid"]:
+                    st.warning(
+                        f"ROC curve unavailable for {t}: {roc_results[t]['reason']}")
+
+            fig_roc = plot_taste_roc(roc_results)
+            if fig_roc is not None:
+                cap_roc = caption_taste_roc(roc_results)
+                save_fig(fig_roc, "roc_taste_classification.png", caption=cap_roc)
+                st.image("roc_taste_classification.png", use_container_width=True)
+
+                # ADDED: ROC Curve Description and Interpretation
+                st.markdown("#### 📖 Understanding the ROC Curve")
+                show_caption(cap_roc)
+            else:
+                st.error(
+                    "No ROC curve could be drawn: none of the five tastes has a valid "
+                    "ROC calculation on this test set (see the warnings above).")
 
         # Summary metric boxes
         hl_test = hamming_loss(Yt_test, Yt_pred_test)
